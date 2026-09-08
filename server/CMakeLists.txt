@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.28)
+project(fzvs_server VERSION 0.1.0 LANGUAGES C)
+
+file(GLOB SERVER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+add_executable(fzvs-server ${SERVER_SOURCES})
+set_target_properties(fzvs-server PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+target_compile_definitions(fzvs-server PRIVATE _POSIX_C_SOURCE=200809L)
+target_include_directories(fzvs-server PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(fzvs-server PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../shared")
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(fzvs-server PRIVATE -Wall -Wextra -Wpedantic -Wformat=2)
+endif()
+
+option(FZVS_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(FZVS_SANITIZERS)
+  if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    message(FATAL_ERROR "FZVS_SANITIZERS requires Clang or GCC")
+  endif()
+  target_compile_options(fzvs-server PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+  target_link_options(fzvs-server PRIVATE -fsanitize=address,undefined)
+endif()

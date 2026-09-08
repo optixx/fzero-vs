@@ -1,0 +1,32 @@
+# Local game images and legacy reference source (never commit these).
+/roms/
+/original/
+*.smc
+*.sfc
+*.fig
+*.swc
+
+# Downloaded upstream source, dependencies, builds and local test sessions.
+/vendor/
+/build/
+/.local-tests/
+
+# Emulator saves and runtime artifacts.
+*.srm
+*.sav
+*.bs[0-9]
+*.bsu
+*.blu
+*.log
+
+# Python environments and caches.
+__pycache__/
+*.py[cod]
+.venv/
+
+# macOS metadata and editor scratch files.
+.DS_Store
+._*
+*.swp
+*.swo
+*~

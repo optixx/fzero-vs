@@ -1,0 +1,583 @@
+diff --git a/ares/ares/platform.hpp b/ares/ares/platform.hpp
+index 029c8de..cba7215 100644
+--- a/ares/ares/platform.hpp
++++ b/ares/ares/platform.hpp
+@@ -3,6 +3,7 @@
+ namespace ares {
+ 
+ enum class Event : u32 {
++  FZVSFrame,  // SNES instruction boundary at the beginning of vertical blank
+   None,
+   Step,
+   Frame,
+diff --git a/ares/sfc/cpu/cpu.cpp b/ares/sfc/cpu/cpu.cpp
+index db4d4ef..771e5b5 100644
+--- a/ares/sfc/cpu/cpu.cpp
++++ b/ares/sfc/cpu/cpu.cpp
+@@ -27,6 +27,13 @@ auto CPU::unload() -> void {
+ }
+ 
+ auto CPU::main() -> void {
++  // Runtime opcode patches must never change an operand halfway through a CPU
++  // instruction. The PPU's frame exit can suspend us inside instruction().
++  bool vblank = vcounter() >= 225;
++  if(vblank && !fzvsVblank) {
++    fzvsVblank = true;
++    platform->event(Event::FZVSFrame);
++  } else if(!vblank) fzvsVblank = false;
+   if(r.wai) return instructionWait();
+   if(r.stp) return instructionStop();
+ 
+@@ -83,6 +90,7 @@ auto CPU::map() -> void {
+ }
+ 
+ auto CPU::power(bool reset) -> void {
++  fzvsVblank = false;
+   WDC65816::power();
+   create(system.cpuFrequency(), std::bind_front(&CPU::main, this));
+   coprocessors.clear();
+diff --git a/ares/sfc/cpu/cpu.hpp b/ares/sfc/cpu/cpu.hpp
+index 5a29b3a..e3c56d9 100644
+--- a/ares/sfc/cpu/cpu.hpp
++++ b/ares/sfc/cpu/cpu.hpp
+@@ -1,5 +1,6 @@
+ struct CPU : WDC65816, Thread, PPUcounter {
+   Node::Object node;
++  bool fzvsVblank = false;
+   Node::Setting::Natural version;
+ 
+   struct Debugger {
+diff --git a/desktop-ui/CMakeLists.txt b/desktop-ui/CMakeLists.txt
+index b5ac8be..2f68d81 100644
+--- a/desktop-ui/CMakeLists.txt
++++ b/desktop-ui/CMakeLists.txt
+@@ -11,6 +11,11 @@ add_executable(
+   tools/tools.cpp
+ )
+ 
++if(NOT FZVS_PROJECT_DIR)
++  message(FATAL_ERROR "Set FZVS_PROJECT_DIR to the F-Zero VS project root")
++endif()
++target_include_directories(desktop-ui PRIVATE "${FZVS_PROJECT_DIR}/client" "${FZVS_PROJECT_DIR}/shared")
++
+ target_sources(desktop-ui PRIVATE cmake/sources.cmake cmake/os-macos.cmake cmake/os-linux.cmake cmake/os-windows.cmake)
+ 
+ include(cmake/sources.cmake)
+@@ -61,4 +66,5 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${desktop-ui_SOURCES})
+ 
+ add_sourcery_command(desktop-ui resource)
+ 
++target_sources(desktop-ui PRIVATE fzvs.cpp "${FZVS_PROJECT_DIR}/client/fzvs_client.cpp")
+ ares_configure_executable(desktop-ui)
+diff --git a/desktop-ui/desktop-ui.cpp b/desktop-ui/desktop-ui.cpp
+index 2da32c0..f5f3a26 100644
+--- a/desktop-ui/desktop-ui.cpp
++++ b/desktop-ui/desktop-ui.cpp
+@@ -10,6 +10,11 @@ auto locate(const string& name) -> string {
+   // First check each path for the presence of the file we are looking for in the following order
+   // allowing users to override the default resources if they wish to do so.
+ 
++  // Mutable files belong to the per-instance profile; resources still use bundle paths.
++  if(!fzvs::client.config.profile.empty() &&
++     (name == "settings.bml" || name.endsWith(".bml") || name == "Systems/")) {
++    return {fzvs::client.config.profile.c_str(), "/", name};
++  }
+   // 1. The application directory
+   string location = {Path::program(), name};
+   if(inode::exists(location)) return location;
+@@ -97,6 +102,40 @@ auto nall::main(Arguments arguments) -> void {
+     program.noFilePrompt = true;
+   }
+ 
++  {
++    auto& c = fzvs::client.config;
++    string value;
++    if(arguments.take("--fzvs-server", value)) { c.enabled = true; c.address = value.data(); }
++    if(arguments.take("--fzvs-room-key", value)) c.key = value.data();
++    if(arguments.take("--fzvs-profile", value)) c.profile = value.data();
++    if(arguments.take("--fzvs-label", value)) c.label = value.data();
++    if(arguments.take("--fzvs-input", value)) c.input = value.data();
++    c.mute = arguments.take("--fzvs-mute");
++    c.baseline = arguments.take("--fzvs-baseline");
++    c.capture = arguments.take("--fzvs-capture");
++    c.autoNext = arguments.take("--fzvs-auto-next");
++    arguments.take("--fzvs-stay-active");
++    if(arguments.take("--fzvs-auto-car", value)) {
++      if(value.size()!=1 || value[0]<'0' || value[0]>'3') { print("Invalid --fzvs-auto-car\n"); exit(2); }
++      c.autoCar = value[0]-'0';
++    }
++    if(arguments.take("--fzvs-window", value)) {
++      char extra;
++      if(sscanf(value.data(), "%d,%d,%d,%d%c", &c.x,&c.y,&c.width,&c.height,&extra)!=4 || c.width<160 || c.height<144 || c.width>8192 || c.height>8192) {
++        print("Invalid --fzvs-window\n"); exit(2);
++      }
++    }
++    if(c.enabled) {
++      setenv("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1", 1);
++      if(c.profile.empty()) c.profile = string{Path::userData(), "fzvs/"}.data();
++      for(auto dir : {"", "/Systems", "/saves", "/screenshots", "/debug"}) directory::create({c.profile.c_str(), dir, "/"});
++      if(c.input!="keyboard" && c.input!="none" && c.input.rfind("gamepad:",0)!=0) { print("Invalid --fzvs-input\n"); exit(2); }
++      if(c.input.rfind("gamepad:",0)==0) {
++        unsigned index; char extra;
++        if(sscanf(c.input.c_str(),"gamepad:%u%c",&index,&extra)!=1 || index>15) { print("Invalid gamepad index\n"); exit(2); }
++      }
++    }
++  }
+   settings.filePath = locate("settings.bml");
+   if(string settingsFile; arguments.take("--settings-file", settingsFile)) {
+     settings.filePath = settingsFile;
+@@ -150,10 +189,23 @@ auto nall::main(Arguments arguments) -> void {
+     settings.process(true);
+   }
+ 
++  if(fzvs::client.active()) {
++    auto& c=fzvs::client.config;
++    settings.paths.home={c.profile.c_str(),"/Systems/"}; settings.paths.saves={c.profile.c_str(),"/saves/"};
++    settings.paths.screenshots={c.profile.c_str(),"/screenshots/"}; settings.paths.debugging={c.profile.c_str(),"/debug/"};
++    settings.input.defocus="Allow"; settings.audio.mute=c.mute; settings.general.rewind=false; settings.general.runAhead=false;
++    settings.debugServer.enabled=false; settings.boot.debugger=false; settings.boot.awaitGDBClient=false;
++    settings.video.adaptiveSizing=false; settings.video.windowWidth=c.width; settings.video.windowHeight=c.height;
++    program.startSaveStateSlot={};
++  }
+   if(program.noFilePrompt) settings.general.noFilePrompt = true;
+ 
+   if(arguments.take("--help")) {
+     print("\n Usage: ares [OPTIONS]... game(s)\n\n");
++    print("F-Zero VS: --fzvs-server HOST:PORT --fzvs-room-key KEY --fzvs-profile DIR\n");
++    print("  --fzvs-label TEXT --fzvs-input keyboard|none|gamepad:N --fzvs-window X,Y,W,H\n");
++    print("  --fzvs-capture --fzvs-auto-next --fzvs-baseline (diagnostic: no game patches)\n");
++    print("  --fzvs-mute --fzvs-stay-active --fzvs-auto-car 0..3 (scripted test driver)\n");
+     print("Options:\n");
+     print("  --help                Displays available options and exit\n");
+     print("  --version             Displays the version string of the application\n");
+@@ -244,6 +296,7 @@ auto nall::main(Arguments arguments) -> void {
+     program.toolsWindowConstructed = true;
+   }
+ 
++  fzvsCreateUI();
+   program.create();
+   Application::onMain(std::bind_front(&Program::main, &program));
+   Application::run();
+diff --git a/desktop-ui/desktop-ui.hpp b/desktop-ui/desktop-ui.hpp
+index eb01c20..d653b4f 100644
+--- a/desktop-ui/desktop-ui.hpp
++++ b/desktop-ui/desktop-ui.hpp
+@@ -20,6 +20,7 @@ namespace ruby {
+   extern Input input;
+ }
+ 
++#include "fzvs_client.hpp"
+ #include "resource/resource.hpp"
+ #include "input/input.hpp"
+ #include "emulator/emulator.hpp"
+@@ -58,3 +59,9 @@ public:
+ };
+ 
+ auto locate(const string& name) -> string;
++
++// F-Zero VS frontend integration (all memory access uses Program::Guard or the worker).
++auto fzvsAttach() -> bool;
++auto fzvsCreateUI() -> void;
++auto fzvsRefreshUI() -> void;
++auto fzvsInput(ares::Node::Input::Input node) -> bool;
+diff --git a/desktop-ui/fzvs.cpp b/desktop-ui/fzvs.cpp
+new file mode 100644
+index 0000000..17a1f7a
+--- /dev/null
++++ b/desktop-ui/fzvs.cpp
+@@ -0,0 +1,133 @@
++#include "desktop-ui.hpp"
++#include <nall/hash/sha256.hpp>
++
++auto fzvsAttach() -> bool {
++  if(!emulator || emulator->name!="Super Famicom") { fzvs::client.failure("Multiplayer requires Super Famicom"); return false; }
++  ares::Node::Debugger::Memory ram,rom;
++  for(auto node:ares::Node::enumerate<ares::Node::Debugger::Memory>(emulator->root)) {
++    if(node->name()=="CPU WRAM") ram=node;
++    if(node->name()=="Cartridge ROM") rom=node;
++  }
++  if(!ram || !rom || ram->size()!=128*1024 || rom->size()!=512*1024) {
++    fzvs::client.failure("Unsupported ROM or missing emulator memory adapter"); return false;
++  }
++  std::vector<uint8_t> bytes(rom->size());
++  for(unsigned i=0;i<bytes.size();i++) bytes[i]=rom->read(i);
++  if(Hash::SHA256(bytes).digest()!="bf16c3c867c58e2ab061c70de9295b6930d63f29f81cc986f5ecae03e0ad18d2") {
++    fzvs::client.failure("ROM SHA-256 mismatch: F-Zero US original revision required"); return false;
++  }
++  fzvs::Memory memory;
++  memory.ram=[ram](uint32_t a) -> uint8_t { return a<ram->size() ? (uint8_t)ram->read(a) : 0; };
++  memory.rom=[rom](uint32_t a) -> uint8_t { return a<rom->size() ? (uint8_t)rom->read(a) : 0; };
++  memory.writeRam=[ram](uint32_t a,uint8_t v) { if(a<ram->size()) ram->write(a,v); };
++  memory.writeRom=[rom](uint32_t a,uint8_t v) { if(a<rom->size()) rom->write(a,v); };
++  memory.reset=[] { emulator->root->power(true); };
++  return fzvs::client.attach(std::move(memory));
++}
++
++struct FZVSWindow : Window {
++  Menu menu{&presentation.menuBar};
++  MenuItem panel{&menu};
++  VerticalLayout layout{this};
++  Label identity{&layout,Size{~0,0}};
++  HorizontalLayout connection{&layout,Size{~0,0}};
++  LineEdit address{&connection,Size{~0,0}};
++  LineEdit key{&connection,Size{140,0}};
++  Button reconnect{&connection,Size{110,0}};
++  Label roster{&layout,Size{~0,110}};
++  HorizontalLayout controls{&layout,Size{~0,0}};
++  ComboButton players{&controls,Size{80,0}};
++  ComboButton track{&controls,Size{~0,0}};
++  Button apply{&controls,Size{100,0}};
++  Button next{&controls,Size{110,0}};
++  CheckLabel overlay{&layout,Size{~0,0}};
++  Label stats{&layout,Size{~0,90}};
++  Label game{&layout,Size{~0,60}};
++  TextEdit events{&layout,Size{~0,190}};
++  FZVSWindow() {
++    setTitle("F-Zero VS — Multiplayer"); layout.setPadding(12);
++    address.setText(fzvs::client.config.address.c_str()); key.setText(fzvs::client.config.key.c_str());
++    address.setToolTip("Server hostname:port"); key.setToolTip("Room key (private friends server)");
++    reconnect.setText("Reconnect").onActivate([&] {
++      Program::Guard guard;
++      fzvs::client.detach();
++      fzvs::client.config.address=address.text().data(); fzvs::client.config.key=key.text().data();
++      if(fzvsAttach()) program.paused=false;
++    });
++    for(int n=2;n<=4;n++) { ComboButtonItem item{&players}; item.setText({n," players"}); }
++    const char *names[]={"Knight — Mute City I","Knight — Big Blue","Knight — Sand Ocean","Knight — Death Wind I","Knight — Silence",
++      "Queen — Mute City II","Queen — Port Town I","Queen — Red Canyon I","Queen — White Land I","Queen — White Land II",
++      "King — Mute City III","King — Death Wind II","King — Port Town II","King — Red Canyon II","King — Fire Field"};
++    for(auto name:names) { ComboButtonItem item{&track}; item.setText(name); }
++    apply.setText("Set race").onActivate([&] {
++      unsigned index=track.selected().offset(); fzvs::client.request(FZ_CONFIG,{(uint8_t)(players.selected().offset()+2),(uint8_t)(index%5),(uint8_t)(index/5)});
++    });
++    next.setText("Next race").onActivate([&] { fzvs::client.request(FZ_NEXT); });
++    overlay.setText("Show network overlay (including fullscreen)").setChecked(true).onToggle([&] {
++      Program::Guard guard; fzvs::client.config.overlay=overlay.checked();
++    });
++    events.setEditable(false); setSize({620,600}); setDismissable();
++    onClose([&] { setVisible(false); });
++  }
++};
++static std::unique_ptr<FZVSWindow> networkWindow;
++auto fzvsCreateUI() -> void {
++  if(!fzvs::client.active()) return;
++  networkWindow=std::make_unique<FZVSWindow>();
++  networkWindow->menu.setText("Multiplayer");
++  networkWindow->panel.setText("Players and diagnostics").onActivate([] {
++    networkWindow->setAlignment(presentation,Alignment::Center); networkWindow->setVisible(); networkWindow->setFocused();
++  });
++  auto& c=fzvs::client.config; auto area=Monitor::workspace(0);
++  int width=std::min(c.width,(int)area.width()),height=std::min(c.height+24,(int)area.height()-30);
++  int x=std::clamp(c.x,(int)area.x(),(int)(area.x()+area.width())-width);
++  int y=std::clamp(c.y,(int)area.y(),(int)(area.y()+area.height())-height);
++  presentation.setGeometry({(float)x,(float)y,(float)width,(float)height});
++}
++auto fzvsRefreshUI() -> void {
++  if(!networkWindow) return;
++  static uint32_t configurationRace=0;
++  static int configuredPlayers=0,configuredTrack=-1;
++  static uint64_t last=0; auto now=chrono::millisecond(); if(now-last<200) return; last=now;
++  auto v=fzvs::client.view(); auto& w=*networkWindow;
++  const char *colors[]={"Pink","Blue","Green","Yellow"};
++  string identity=v.player>=0 ? string{"YOU: P",v.player+1," • ",colors[v.player]," • ",fz_car_name(v.peers[v.player].car)} : "Connecting";
++  w.identity.setText(identity); presentation.setTitle({fzvs::client.config.label.c_str()," — ",identity});
++  presentation.statusLeft.setText({identity," | ",v.game.c_str()," | RTT ",(int)v.rtt," ms"});
++  string roster;
++  for(int i=0;i<4;i++) roster.append("P",i+1,i==v.player?" [YOU] ":" ",colors[i]," • ",fz_car_name(v.peers[i].car)," • ",fz_status_name(v.peers[i].status),
++    " • update age ",v.peers[i].age," ms",i==v.host?" [HOST]":"","\n");
++  w.roster.setText(roster);
++  if(configurationRace!=v.race || configuredPlayers!=v.expected || configuredTrack!=v.league*5+v.track) {
++    configurationRace=v.race; configuredPlayers=v.expected; configuredTrack=v.league*5+v.track;
++    w.players.item(v.expected-2).setSelected(); w.track.item(configuredTrack).setSelected();
++  }
++  w.apply.setEnabled(v.connected && v.player==v.host && v.phase==FZ_LOBBY);
++  w.next.setEnabled(v.connected && v.player==v.host && (v.phase==FZ_RESULTS || v.phase==FZ_LOBBY));
++  char metrics[512]; snprintf(metrics,sizeof(metrics),"RTT %.1f ms   Jitter %.1f ms   Estimated snapshot loss %.1f%%\nRX %.1f/s   TX %.1f/s   %.1f KiB/s   Emulation %.1f fps\nStale packets %llu   Control retries %llu",v.rtt,v.jitter,v.loss,v.rxRate,v.txRate,v.kbps,v.fps,(unsigned long long)v.stale,(unsigned long long)v.retries);
++  w.stats.setText(metrics);
++  char state[512]; snprintf(state,sizeof(state),"Race %u • Server: %s • Game: %s • Track %d/%d\nWRAM $54/$55/$56 = %02X/%02X/%02X • X/Y = %u/%u • Patched bytes %u",v.race,fz_phase_name(v.phase),v.game.c_str(),v.league,v.track,v.ram54,v.ram55,v.ram56,v.x,v.y,v.patches);
++  w.game.setText(state); w.events.setText(v.events.c_str());
++}
++auto fzvsInput(ares::Node::Input::Input node) -> bool {
++  auto button=node->cast<ares::Node::Input::Button>();
++  if(!button) return false;
++  auto& c=fzvs::client.config;
++  if(c.autoCar>=0) { button->setValue(fzvs::client.scriptedButton(node->name().data())); return true; }
++  button->setValue(0);
++  if(c.input=="none") return true;
++  lock_guard<recursive_mutex> lock(program.inputMutex);
++  std::string name=node->name().data();
++  if(c.input=="keyboard") {
++    if(!presentation.focused()) return true;
++    static const std::map<std::string,std::string> keys={{"Up","Up"},{"Down","Down"},{"Left","Left"},{"Right","Right"},{"B","Z"},{"A","X"},{"Y","A"},{"X","S"},{"L","Q"},{"R","W"},{"Start","Return"},{"Select","Space"}};
++    auto found=keys.find(name); if(found==keys.end()) return true;
++    for(auto& device:inputManager.devices) if(device->isKeyboard()) {
++      auto& group=device->group(HID::Keyboard::GroupID::Button);
++      for(unsigned i=0;i<group.size();i++) if(group.input(i).name()==found->second.c_str()) button->setValue(group.input(i).value()!=0);
++    }
++    return true;
++  }
++  // Gamepads use the user's normal Ares mappings, with a device filter in InputDigital.
++  return false;
++}
+diff --git a/desktop-ui/input/hotkeys.cpp b/desktop-ui/input/hotkeys.cpp
+index 772f69b..666098e 100644
+--- a/desktop-ui/input/hotkeys.cpp
++++ b/desktop-ui/input/hotkeys.cpp
+@@ -30,6 +30,7 @@ auto InputManager::createHotkeys() -> void {
+   }));
+ 
+   hotkeys.push_back(InputHotkey("Fast Forward").onPress([&] {
++    if(fzvs::client.active()) return;
+     Program::Guard guard;
+     if(!emulator || program.rewinding) return;
+     if(!toggleFastForwardState) {
+@@ -53,6 +54,7 @@ auto InputManager::createHotkeys() -> void {
+   }));
+ 
+   hotkeys.push_back(InputHotkey("Toggle Fast Forward").onPress([&] {
++    if(fzvs::client.active()) return;
+     Program::Guard guard;
+     if(!emulator || program.rewinding) return;
+     program.fastForwarding = !program.fastForwarding;
+@@ -75,6 +77,7 @@ auto InputManager::createHotkeys() -> void {
+   }));
+ 
+   hotkeys.push_back(InputHotkey("Rewind").onPress([&] {
++    if(fzvs::client.active()) return;
+     Program::Guard guard;
+     if(!emulator || program.fastForwarding) return;
+     if(program.rewind.frequency == 0) {
+@@ -89,6 +92,7 @@ auto InputManager::createHotkeys() -> void {
+   }));
+ 
+   hotkeys.push_back(InputHotkey("Frame Advance").onPress([&] {
++    if(fzvs::client.active()) return;
+     Program::Guard guard;
+     if(!emulator) return;
+     if(!program.paused) program.pause(true);
+@@ -134,12 +138,14 @@ auto InputManager::createHotkeys() -> void {
+   }));
+ 
+   hotkeys.push_back(InputHotkey("Reset System").onPress([&] {
++    if(fzvs::client.active()) return;
+     Program::Guard guard;
+     if(!emulator) return;
+     emulator->root->power(true);
+   }));
+ 
+   hotkeys.push_back(InputHotkey("Reload Current Game").onPress([&] {
++    if(fzvs::client.active()) return;
+     Program::Guard guard;
+     if(!emulator) return;
+     program.load(emulator, emulator->game->location);
+diff --git a/desktop-ui/input/input.cpp b/desktop-ui/input/input.cpp
+index e2e4577..c39eec7 100644
+--- a/desktop-ui/input/input.cpp
++++ b/desktop-ui/input/input.cpp
+@@ -168,6 +168,15 @@ auto InputDigital::value() -> s16 {
+     if(!binding.device) continue;  //unbound
+ 
+     auto& device = binding.device;
++    if(fzvs::client.active()) {
++      const auto& input=fzvs::client.config.input;
++      if(input.rfind("gamepad:",0)==0) {
++        unsigned selected=(unsigned)std::stoul(input.substr(8)),index=0;
++        std::shared_ptr<HID::Device> allowed;
++        for(auto& candidate:inputManager.devices) if(candidate->isJoypad()) { if(index++==selected) { allowed=candidate; break; } }
++        if(device!=allowed) continue;
++      }
++    }
+     auto& groupID = binding.groupID;
+     auto& inputID = binding.inputID;
+     auto& qualifier = binding.qualifier;
+diff --git a/desktop-ui/presentation/presentation.cpp b/desktop-ui/presentation/presentation.cpp
+index 72f3bfc..cff37ad 100644
+--- a/desktop-ui/presentation/presentation.cpp
++++ b/desktop-ui/presentation/presentation.cpp
+@@ -972,6 +972,7 @@ auto Presentation::refreshSystemMenu() -> void {
+   MenuItem reset{&systemMenu};
+   reset.setText("Reset").setIcon(Icon::Action::Refresh).onActivate([&] {
+     Program::Guard guard;
++    if(fzvs::client.active()) return;
+     emulator->root->power(true);
+     program.showMessage("System reset");
+   });
+diff --git a/desktop-ui/program/load.cpp b/desktop-ui/program/load.cpp
+index 1269165..66905bf 100644
+--- a/desktop-ui/program/load.cpp
++++ b/desktop-ui/program/load.cpp
+@@ -156,11 +156,13 @@ auto Program::load(string location) -> bool {
+     }
+   }
+ 
++  if(fzvs::client.active() && !fzvsAttach()) { paused=true; return false; }
+   return true;
+ }
+ 
+ auto Program::unload() -> void {
+   Program::Guard guard;
++  if(fzvs::client.active()) fzvs::client.detach();
+   if(!emulator) return;
+ 
+   nall::GDB::server.close();
+diff --git a/desktop-ui/program/platform.cpp b/desktop-ui/program/platform.cpp
+index 4f49c5a..d157e3c 100644
+--- a/desktop-ui/program/platform.cpp
++++ b/desktop-ui/program/platform.cpp
+@@ -27,6 +27,8 @@ auto Program::pak(ares::Node::Object node) -> std::shared_ptr<vfs::directory> {
+ }
+ 
+ auto Program::event(ares::Event event) -> void {
++  if(event==ares::Event::FZVSFrame) { if(fzvs::client.active()) fzvs::client.frame(); return; }
++  if(fzvs::client.active() && (event==ares::Event::FastForwardOn || event==ares::Event::FastForwardOff)) return;
+   if(event == ares::Event::FastForwardOn) {
+     fastForwarding = true;
+     ruby::video.setBlocking(false);
+@@ -174,6 +176,17 @@ auto Program::video(ares::Node::Video::Screen node, const u32* data, u32 pitch,
+     for(auto y : range(height)) {
+       memory::copy<u32>(output + y * length, data + y * pitch, width);
+     }
++    if(fzvs::client.active()) {
++      fzvs::client.overlay(output,width,height,length);
++      if(fzvs::client.config.capture) {
++        static uint32_t captured=0,observed=0,raceFrames=0;
++        auto v=fzvs::client.view();
++        if(v.race!=observed) { observed=v.race; raceFrames=0; }
++        if(v.game=="racing" && ++raceFrames>=300 && captured!=v.race) {
++          captureScreenshot(output,length*4,width,height); captured=v.race;
++        }
++      }
++    }
+     ruby::video.release();
+     ruby::video.output(outputWidth, outputHeight);
+   }
+@@ -234,6 +247,7 @@ auto Program::audio(ares::Node::Audio::Stream node) -> void {
+ }
+ 
+ auto Program::input(ares::Node::Input::Input node) -> void {
++  if(fzvs::client.active() && fzvsInput(node)) return;
+   if(settings.input.defocus != "Allow") {
+     if(!ruby::video.fullScreen() && !presentation.focused()) {
+       //treat the input as not being active
+diff --git a/desktop-ui/program/program.cpp b/desktop-ui/program/program.cpp
+index 42cecc5..8c2da6e 100644
+--- a/desktop-ui/program/program.cpp
++++ b/desktop-ui/program/program.cpp
+@@ -72,6 +72,7 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
+       waitForInterrupts();
+       continue;
+     }
++    if(fzvs::client.active()) fzvs::client.tick();
+     if(!emulator) {
+       usleep(20 * 1000);
+       continue;
+@@ -83,7 +84,7 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
+       continue;
+     }
+ 
+-    bool defocused = settings.input.defocus == "Pause" && !ruby::video.fullScreen() && !presentation.focused();
++    bool defocused = !fzvs::client.active() && settings.input.defocus == "Pause" && !ruby::video.fullScreen() && !presentation.focused();
+ 
+     if(!emulator || (paused && !program.requestFrameAdvance) || defocused) {
+       ruby::audio.clear();
+@@ -97,7 +98,7 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
+     nall::GDB::server.updateLoop();
+ 
+     program.requestFrameAdvance = false;
+-    if(!runAhead || fastForwarding || rewinding) {
++    if(fzvs::client.active() || !runAhead || fastForwarding || rewinding) {
+       emulator->root->run();
+     } else {
+       ares::setRunAhead(true);
+@@ -111,6 +112,7 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
+ 
+     nall::GDB::server.updateLoop();
+ 
++
+     if(settings.general.autoSaveMemory) {
+       static u64 previousTime = chrono::timestamp();
+       u64 currentTime = chrono::timestamp();
+@@ -143,6 +145,7 @@ auto Program::main() -> void {
+   inputManager.pollHotkeys();
+ 
+   updateMessage();
++  fzvsRefreshUI();
+ 
+   //If Platform::video() changed the screen resolution, resize the presentation window here.
+   //Window operations must be performed from the main thread.
+diff --git a/desktop-ui/program/rewind.cpp b/desktop-ui/program/rewind.cpp
+index 50849e5..4ef7dd7 100644
+--- a/desktop-ui/program/rewind.cpp
++++ b/desktop-ui/program/rewind.cpp
+@@ -13,6 +13,7 @@ auto Program::rewindReset() -> void {
+ }
+ 
+ auto Program::rewindRun() -> void {
++  if(fzvs::client.active()) return;
+   if(!settings.general.rewind) return;  //rewind disabled?
+   Program::Guard guard;
+ 
+diff --git a/desktop-ui/program/states.cpp b/desktop-ui/program/states.cpp
+index 6787199..b6e671d 100644
+--- a/desktop-ui/program/states.cpp
++++ b/desktop-ui/program/states.cpp
+@@ -1,4 +1,5 @@
+ auto Program::stateSave(u32 slot) -> bool {
++  if(fzvs::client.active()) return false;
+   Program::Guard guard;
+   if(!emulator) return false;
+ 
+@@ -20,6 +21,7 @@ auto Program::stateSave(u32 slot) -> bool {
+ }
+ 
+ auto Program::stateLoad(u32 slot) -> bool {
++  if(fzvs::client.active()) return false;
+   Program::Guard guard;
+   if(!emulator) return false;
+ 
+@@ -44,6 +46,7 @@ auto Program::stateLoad(u32 slot) -> bool {
+ }
+ 
+ auto Program::undoStateSave() -> bool {
++  if(fzvs::client.active()) return false;
+   Program::Guard guard;
+   if(!emulator) return false;
+ 
+@@ -59,6 +62,7 @@ auto Program::undoStateSave() -> bool {
+ }
+ 
+ auto Program::undoStateLoad() -> bool {
++  if(fzvs::client.active()) return false;
+   Program::Guard guard;
+   if(!emulator) return false;
+ 
+diff --git a/desktop-ui/program/utility.cpp b/desktop-ui/program/utility.cpp
+index 0c91a3c..fb89676 100644
+--- a/desktop-ui/program/utility.cpp
++++ b/desktop-ui/program/utility.cpp
+@@ -1,4 +1,5 @@
+ auto Program::pause(bool state) -> void {
++  if(fzvs::client.active() && state) return;
+   Program::Guard guard;
+   if(paused == state) return;
+   paused = state;
+diff --git a/nall/nall/arguments.hpp b/nall/nall/arguments.hpp
+index c2c634b..c2baa9c 100644
+--- a/nall/nall/arguments.hpp
++++ b/nall/nall/arguments.hpp
+@@ -60,7 +60,14 @@ inline auto Arguments::construct() -> void {
+   programArgument = {Path::real(programArgument), Location::file(programArgument)};
+ 
+   //normalize path and file arguments
+-  for(auto& argument : arguments) {
++  for(size_t index = 0; index < arguments.size(); index++) {
++    auto& argument = arguments[index];
++    // FZVS option values are opaque. Path::real returns a file's parent,
++    // which would collapse all existing per-client profile directories.
++    if(index && (arguments[index-1] == "--fzvs-profile" || arguments[index-1] == "--fzvs-room-key"
++      || arguments[index-1] == "--fzvs-label" || arguments[index-1] == "--fzvs-server"
++      || arguments[index-1] == "--fzvs-input" || arguments[index-1] == "--fzvs-window"
++      || arguments[index-1] == "--fzvs-auto-car")) continue;
+     argument = directory::resolveSymLink(argument);
+     if(directory::exists(argument)) {
+       argument.transform("\\", "/").trimRight("/").append("/");

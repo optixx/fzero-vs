@@ -1,0 +1,74 @@
+diff --git a/desktop-ui/fzvs.cpp b/desktop-ui/fzvs.cpp
+index 17a1f7a..cf94a88 100644
+--- a/desktop-ui/fzvs.cpp
++++ b/desktop-ui/fzvs.cpp
+@@ -93,7 +93,6 @@ auto fzvsRefreshUI() -> void {
+   const char *colors[]={"Pink","Blue","Green","Yellow"};
+   string identity=v.player>=0 ? string{"YOU: P",v.player+1," • ",colors[v.player]," • ",fz_car_name(v.peers[v.player].car)} : "Connecting";
+   w.identity.setText(identity); presentation.setTitle({fzvs::client.config.label.c_str()," — ",identity});
+-  presentation.statusLeft.setText({identity," | ",v.game.c_str()," | RTT ",(int)v.rtt," ms"});
+   string roster;
+   for(int i=0;i<4;i++) roster.append("P",i+1,i==v.player?" [YOU] ":" ",colors[i]," • ",fz_car_name(v.peers[i].car)," • ",fz_status_name(v.peers[i].status),
+     " • update age ",v.peers[i].age," ms",i==v.host?" [HOST]":"","\n");
+diff --git a/desktop-ui/program/platform.cpp b/desktop-ui/program/platform.cpp
+index d157e3c..3e6fac3 100644
+--- a/desktop-ui/program/platform.cpp
++++ b/desktop-ui/program/platform.cpp
+@@ -118,7 +118,7 @@ auto Program::video(ares::Node::Video::Screen node, const u32* data, u32 pitch,
+     scaleWarningActive = true;
+     if(lastScaleWarning == message) return;
+     lastScaleWarning = message;
+-    presentation.statusLeft.setText(message);
++    showMessage(message);
+   };
+ 
+   u32 outputWidth = videoWidth * multiplier;
+diff --git a/desktop-ui/program/status.cpp b/desktop-ui/program/status.cpp
+index 08f6af4..f775854 100644
+--- a/desktop-ui/program/status.cpp
++++ b/desktop-ui/program/status.cpp
+@@ -7,15 +7,25 @@ auto Program::updateMessage() -> void {
+     if(!messages.empty()) { message = messages.front(); messages.erase(messages.begin()); }
+   }
+ 
++  // One owner for the left footer: transient messages take priority, then
++  // capture/network status, then the normal debugger/system configuration.
++  string text;
+   if(message.text.length() > 0) {
+-    presentation.statusLeft.setText(message.text);
++    text = message.text;
++  } else if(emulator && keyboardCaptured) {
++    text = "Keyboard capture is active";
++  } else if(emulator && fzvs::client.active()) {
++    auto view = fzvs::client.view();
++    string identity = view.player >= 0
++      ? string{"YOU: P", view.player + 1, " • ", fz_car_name(view.peers[view.player].car)}
++      : string{"F-Zero VS"};
++    text = {identity, " | ", view.game.c_str(), " | RTT ", (int)view.rtt, " ms"};
+   } else if(settings.debugServer.enabled) {
+-    presentation.statusLeft.setText(nall::GDB::server.getStatusText(settings.debugServer.port, settings.debugServer.useIPv4));
++    text = nall::GDB::server.getStatusText(settings.debugServer.port, settings.debugServer.useIPv4);
+   } else if(configuration) {
+-    presentation.statusLeft.setText(configuration);
+-  } else {
+-    presentation.statusLeft.setText();
++    text = configuration;
+   }
++  presentation.statusLeft.setText(text);
+ 
+   if(vblanksPerSecond > 0 && !paused) {
+     presentation.statusRight.setText({ vblanksPerSecond.load(), " VPS" });
+@@ -25,13 +35,6 @@ auto Program::updateMessage() -> void {
+     presentation.statusRight.setText("Unloaded");
+   }
+ 
+-  if (message.text == "") {
+-    if (emulator && keyboardCaptured) {
+-      presentation.statusLeft.setText("Keyboard capture is active");
+-    }
+-  }
+-
+-  
+   bool defocused = settings.input.defocus == "Pause" && !ruby::video.fullScreen() && !presentation.focused();
+   if(emulator && defocused) message.text = "Paused";
+ }
