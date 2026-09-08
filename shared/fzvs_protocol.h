@@ -56,4 +56,13 @@ static inline const char *fz_car_name(unsigned n) {
   static const char *const names[]={"Blue Falcon","Wild Goose","Golden Fox","Fire Stingray"};
   return n<4 ? names[n] : "unknown";
 }
+/* Zero is a valid machine ID, but JOINED/EMPTY slots have no selection yet.
+   Use status rather than the initialized car byte when presenting the roster. */
+static inline const char *fz_selected_car_name(unsigned status,unsigned car) {
+  return status>=FZ_SELECTED && status<=FZ_FINISHED ? fz_car_name(car) : "Machine not selected";
+}
+static inline const char *fz_player_color(unsigned player) {
+  static const char *const colors[]={"Pink","Blue","Green","Yellow"};
+  return player<4 ? colors[player] : "Unknown";
+}
 #endif

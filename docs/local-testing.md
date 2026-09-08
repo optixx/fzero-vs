@@ -107,7 +107,10 @@ single-player execution. It cannot establish a multiplayer race.
 Open **Multiplayer → Players and diagnostics** for roster, host controls, race
 configuration, raw game state, metrics and recent events. The single-line overlay
 shows only RTT, jitter and estimated packet loss, including in fullscreen. Player
-identity and game state appear in the window title/footer. Host **Next race** returns everyone to a fresh lobby.
+identity and game state appear in the window title/footer. Player colors are
+fixed (P1 Pink, P2 Blue, P3 Green, P4 Yellow), independently of machine choice.
+The UI shows “Machine not selected” until confirmation; multiple players may
+choose the same machine. Host **Next race** returns everyone to a fresh lobby.
 Keyboard: arrows, Z=B, X=A, A=Y, S=X, Q=L, W=R, Return=Start, Space=Select.
 Gamepads use normal Ares button mappings, filtered to the selected device index.
 Pause, rewind, savestates and fast-forward are disabled while networking is active.

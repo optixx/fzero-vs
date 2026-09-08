@@ -1,0 +1,31 @@
+diff --git a/desktop-ui/fzvs.cpp b/desktop-ui/fzvs.cpp
+index cf94a88..34670ff 100644
+--- a/desktop-ui/fzvs.cpp
++++ b/desktop-ui/fzvs.cpp
+@@ -91,10 +91,10 @@ auto fzvsRefreshUI() -> void {
+   static uint64_t last=0; auto now=chrono::millisecond(); if(now-last<200) return; last=now;
+   auto v=fzvs::client.view(); auto& w=*networkWindow;
+   const char *colors[]={"Pink","Blue","Green","Yellow"};
+-  string identity=v.player>=0 ? string{"YOU: P",v.player+1," • ",colors[v.player]," • ",fz_car_name(v.peers[v.player].car)} : "Connecting";
++  string identity=v.player>=0 ? string{"YOU: P",v.player+1," • ",colors[v.player]," • ",fz_selected_car_name(v.peers[v.player].status,v.peers[v.player].car)} : "Connecting";
+   w.identity.setText(identity); presentation.setTitle({fzvs::client.config.label.c_str()," — ",identity});
+   string roster;
+-  for(int i=0;i<4;i++) roster.append("P",i+1,i==v.player?" [YOU] ":" ",colors[i]," • ",fz_car_name(v.peers[i].car)," • ",fz_status_name(v.peers[i].status),
++  for(int i=0;i<4;i++) roster.append("P",i+1,i==v.player?" [YOU] ":" ",colors[i]," • ",fz_selected_car_name(v.peers[i].status,v.peers[i].car)," • ",fz_status_name(v.peers[i].status),
+     " • update age ",v.peers[i].age," ms",i==v.host?" [HOST]":"","\n");
+   w.roster.setText(roster);
+   if(configurationRace!=v.race || configuredPlayers!=v.expected || configuredTrack!=v.league*5+v.track) {
+diff --git a/desktop-ui/program/status.cpp b/desktop-ui/program/status.cpp
+index f775854..3538362 100644
+--- a/desktop-ui/program/status.cpp
++++ b/desktop-ui/program/status.cpp
+@@ -17,7 +17,8 @@ auto Program::updateMessage() -> void {
+   } else if(emulator && fzvs::client.active()) {
+     auto view = fzvs::client.view();
+     string identity = view.player >= 0
+-      ? string{"YOU: P", view.player + 1, " • ", fz_car_name(view.peers[view.player].car)}
++      ? string{"YOU: P", view.player + 1, " • ", fz_player_color(view.player), " • ",
++          fz_selected_car_name(view.peers[view.player].status, view.peers[view.player].car)}
+       : string{"F-Zero VS"};
+     text = {identity, " | ", view.game.c_str(), " | RTT ", (int)view.rtt, " ms"};
+   } else if(settings.debugServer.enabled) {
