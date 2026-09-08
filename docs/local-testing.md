@@ -1,6 +1,9 @@
 # Local multiplayer test harness
 
-The harness starts one loopback-only server and 2–4 independent Ares processes.
+The harness starts 2–4 independent Ares processes. Client 1 embeds a loopback-only
+server and registers as P1 before the remaining clients launch. No server process
+is created in the default hosted mode. Use `--server-mode standalone` to launch
+the dedicated server plus 2–4 Ares processes.
 Build both components with `make all`. The networking flags require this patched
 build; stock Ares does not support them.
 
@@ -26,7 +29,7 @@ are resolved from the invoking directory; the wrappers work from any directory.
 Default binaries are `build/bin/ares` and `build/server/fzvs-server`. The default
 ROM is `roms/F-ZERO (U) [!].smc`.
 
-Options include `--players 3`, `--port 12001` for a second concurrent setup,
+Options include `--players 3`, `--port 12002` for a second concurrent setup,
 `--startup-timeout 20`, `--duration 60`, and `--run-root /path/to/logs`.
 Each run creates a unique directory under `.local-tests/` containing `launch.json`,
 `result.json`, server/client logs, and independent working/profile directories.
@@ -36,8 +39,8 @@ Only client 1 has audio enabled. By default it uses the keyboard and the other
 clients have input disabled. Assign gamepads explicitly to drive multiple cars;
 use `--auto-drive` for scripted menu navigation and straight-line acceleration. Keyboard input
 is focus-sensitive, but all clients must continue emulating while unfocused.
-The launch order does not imply a server player ID: windows are labelled
-**Client 1–4**, and the multiplayer UI shows the actual assigned **P1–P4**.
+Client 1 is reserved P1 in hosted mode; guests receive the remaining slots in
+arrival order. Windows show both the client label and assigned P1–P4 identity.
 
 Windows request 640×480 game viewports in a two-column layout. Ares clamps
 window placement to the available desktop when the requested grid will not fit.
@@ -46,6 +49,15 @@ launched process groups, escalating to SIGKILL after three seconds. Logs remain
 available. The supervisor does not kill processes by name or touch other sessions.
 
 ## Binary integration contract
+
+Hosted Ares uses `--fzvs-host --fzvs-players N --fzvs-bind 127.0.0.1
+--fzvs-port N --fzvs-room-name TEXT --fzvs-track N --fzvs-league N
+--fzvs-host-ready-file PATH` (one shell line). The host readiness file appears
+only after binding and the local P1 handshake, and is removed on normal shutdown.
+The separate server log is `client-1/host-server.log`; client stdout remains
+`client-1.log`. UDP 12001 is reserved for discovery and cannot be a game port.
+
+The following standalone-server contract applies with `--server-mode standalone`.
 
 The server accepts:
 
@@ -104,7 +116,7 @@ selects Fire Field (track 0–4, league 0–2).
 `--baseline` disables all ROM/WRAM patches for a graphics comparison with normal
 single-player execution. It cannot establish a multiplayer race.
 
-Open **Multiplayer → Players and diagnostics** for roster, host controls, race
+Open **Multiplayer → F-Zero VS…** for roster, host controls, race
 configuration, raw game state, metrics and recent events. The single-line overlay
 shows only RTT, jitter and estimated packet loss, including in fullscreen. Player
 identity and game state appear in the window title/footer. Player colors are

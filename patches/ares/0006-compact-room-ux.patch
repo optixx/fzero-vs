@@ -1,0 +1,409 @@
+diff --git a/desktop-ui/fzvs.cpp b/desktop-ui/fzvs.cpp
+index 0d637bb..13f2668 100644
+--- a/desktop-ui/fzvs.cpp
++++ b/desktop-ui/fzvs.cpp
+@@ -1,6 +1,7 @@
+ #include "desktop-ui.hpp"
+ #include <nall/hash/sha256.hpp>
+ #include <unistd.h>
++#include "fzvs_presentation.hpp"
+ 
+ static const char *trackNames[]={"Knight — Mute City I","Knight — Big Blue","Knight — Sand Ocean","Knight — Death Wind I","Knight — Silence",
+       "Queen — Mute City II","Queen — Port Town I","Queen — Red Canyon I","Queen — White Land I","Queen — White Land II",
+@@ -84,71 +85,110 @@ auto fzvsOnUnload() -> void { leaveSession(false); }
+ struct FZVSWindow : Window {
+   Menu menu{&presentation.menuBar};MenuItem panel{&menu};
+   VerticalLayout layout{this};
+-  Label identity{&layout,Size{~0,0}};
+-  Label status{&layout,Size{~0,48}};
+-  Button leave{&layout,Size{~0,0}};
+   TabFrame tabs{&layout,Size{~0,~0}};
+-  TabFrameItem hostTab{&tabs},joinTab{&tabs},diagnosticsTab{&tabs};
+-  VerticalLayout hostLayout{&hostTab},joinLayout{&joinTab},diagnosticsLayout{&diagnosticsTab};
+-  Label nameLabel{&hostLayout,Size{~0,0}};LineEdit roomName{&hostLayout,Size{~0,0}};
+-  Label playersLabel{&hostLayout,Size{~0,0}};ComboButton players{&hostLayout,Size{~0,0}};
+-  Label trackLabel{&hostLayout,Size{~0,0}};ComboButton track{&hostLayout,Size{~0,0}};
+-  Label keyLabel{&hostLayout,Size{~0,0}};LineEdit hostKey{&hostLayout,Size{~0,0}};
+-  CheckLabel advanced{&hostLayout,Size{~0,0}};
+-  HorizontalLayout networkFields{&hostLayout,Size{~0,0}};
+-  Label bindLabel{&networkFields,Size{50,0}};LineEdit bindAddress{&networkFields,Size{~0,0}};
+-  Label portLabel{&networkFields,Size{45,0}};LineEdit port{&networkFields,Size{90,0}};
+-  Button hostButton{&hostLayout,Size{~0,0}};
+-  Label addresses{&hostLayout,Size{~0,65}};
+-  HorizontalLayout raceControls{&hostLayout,Size{~0,0}};
+-  Button apply{&raceControls,Size{~0,0}},next{&raceControls,Size{~0,0}};
+-  Label nearbyLabel{&joinLayout,Size{~0,0}};ListView rooms{&joinLayout,Size{~0,200}};
+-  Label addressLabel{&joinLayout,Size{~0,0}};LineEdit address{&joinLayout,Size{~0,0}};
+-  Label passwordLabel{&joinLayout,Size{~0,0}};LineEdit key{&joinLayout,Size{~0,0}};
+-  Button joinButton{&joinLayout,Size{~0,0}};
+-  Label discoveryStatus{&joinLayout,Size{~0,50}};
+-  Label roster{&diagnosticsLayout,Size{~0,105}};
+-  Label stats{&diagnosticsLayout,Size{~0,90}};
+-  Label serverStats{&diagnosticsLayout,Size{~0,100}};
+-  CheckLabel overlay{&diagnosticsLayout,Size{~0,0}};
+-  ComboButton severity{&diagnosticsLayout,Size{~0,0}};
+-  TextEdit events{&diagnosticsLayout,Size{~0,~0}};
++  TabFrameItem playTab{&tabs},diagnosticsTab{&tabs};
++  VerticalLayout play{&playTab},diagnostics{&diagnosticsTab};
++  VerticalLayout setup{&play,Size{~0,~0}};
++  HorizontalLayout chooser{&setup,Size{~0,0}};
++  RadioLabel chooseHost{&chooser,Size{100,0}},chooseJoin{&chooser,Size{100,0}};
++  Group choices{&chooseHost,&chooseJoin};
++  VerticalLayout hostForm{&setup,Size{~0,0}},joinForm{&setup,Size{~0,~0}};
++  Label nameLabel{&hostForm,Size{~0,0}};LineEdit roomName{&hostForm,Size{~0,0}};
++  HorizontalLayout raceFields{&hostForm,Size{~0,0}};
++  VerticalLayout playerField{&raceFields,Size{120,0}},trackField{&raceFields,Size{~0,0}};
++  Label playersLabel{&playerField,Size{~0,0}};ComboButton players{&playerField,Size{~0,0}};
++  Label trackLabel{&trackField,Size{~0,0}};ComboButton track{&trackField,Size{~0,0}};
++  Label keyLabel{&hostForm,Size{~0,0}};LineEdit hostKey{&hostForm,Size{~0,0}};
++  CheckLabel advanced{&hostForm,Size{~0,0}};
++  HorizontalLayout networkFields{&hostForm,Size{~0,0}};
++  Label bindLabel{&networkFields,Size{45,0}};LineEdit bindAddress{&networkFields,Size{~0,0}};
++  Label portLabel{&networkFields,Size{40,0}};LineEdit port{&networkFields,Size{85,0}};
++  Label hostHelp{&hostForm,Size{~0,0}};
++  Label nearbyLabel{&joinForm,Size{~0,0}};
++  TableView rooms{&joinForm,Size{~0,~0}};
++  HorizontalLayout discoveryRow{&joinForm,Size{~0,0}};
++  Label discoveryStatus{&discoveryRow,Size{~0,0}};Button retry{&discoveryRow,Size{70,0}};
++  Label addressLabel{&joinForm,Size{~0,0}};LineEdit address{&joinForm,Size{~0,0}};
++  Label passwordLabel{&joinForm,Size{~0,0}};LineEdit key{&joinForm,Size{~0,0}};
++  Label formMessage{&setup,Size{~0,0}};
++  HorizontalLayout setupActions{&setup,Size{~0,0}};
++  Label setupActionSpace{&setupActions,Size{~0,0}};
++  Button create{&setupActions,Size{125,0}},joinButton{&setupActions,Size{125,0}},cancel{&setupActions,Size{90,0}};
++  VerticalLayout room{&play,Size{~0,~0}};
++  Label roomTitle{&room,Size{~0,0}},roomDetails{&room,Size{~0,0}},guidance{&room,Size{~0,0}};
++  Label identity{&room,Size{~0,0}},roster{&room,Size{~0,0}};
++  Label connectionLabel{&room,Size{~0,0}};TextEdit addresses{&room,Size{~0,60}};
++  VerticalLayout hostControls{&room,Size{~0,0}};
++  Label raceSettingsLabel{&hostControls,Size{~0,0}};
++  HorizontalLayout editFields{&hostControls,Size{~0,0}};
++  ComboButton roomPlayers{&editFields,Size{110,0}},roomTrack{&editFields,Size{~0,0}};
++  Button apply{&editFields,Size{120,0}};
++  Label roomMessage{&room,Size{~0,0}};
++  Label roomSpace{&room,Size{~0,~0}};
++  HorizontalLayout roomActions{&room,Size{~0,0}};
++  Button next{&roomActions,Size{~0,0}},leave{&roomActions,Size{~0,0}};
++  Label emptyStats{&diagnostics,Size{~0,0}};
++  VerticalLayout liveStats{&diagnostics,Size{~0,0}};
++  Label connectionStats{&liveStats,Size{~0,0}},playerStats{&liveStats,Size{~0,0}},serverStats{&liveStats,Size{~0,0}};
++  CheckLabel technical{&diagnostics,Size{~0,0}};
++  TextEdit details{&diagnostics,Size{~0,95}};
++  CheckLabel overlay{&diagnostics,Size{~0,0}};
++  HorizontalLayout logControls{&diagnostics,Size{~0,0}};
++  Label logLabel{&logControls,Size{65,0}};ComboButton severity{&logControls,Size{120,0}};
++  CheckLabel pauseLog{&logControls,Size{~0,0}};
++  TextEdit events{&diagnostics,Size{~0,~0}};
+   std::vector<fzvs::Room> discovered;
+-  string roomSignature;
++  string roomSignature,lastLog,lastClientLog,lastDetails,joinedName,joinedAddress,requestMessage;
++  bool focusedGame=false,updatingRooms=false,applying=false;
++  unsigned requestedPlayers=0,requestedTrack=0,requestedLeague=0;
++  uint64_t appliedAt=0;
+   FZVSWindow() {
+-    setTitle("F-Zero VS — Multiplayer");layout.setPadding(12);
+-    hostLayout.setPadding(10);joinLayout.setPadding(10);diagnosticsLayout.setPadding(10);
+-    hostTab.setText("Host");joinTab.setText("Join");diagnosticsTab.setText("Diagnostics");
+-    nameLabel.setText("Room name");playersLabel.setText("Total players (including you)");trackLabel.setText("Track");
+-    keyLabel.setText("Room password (optional — leave empty for an open room)");
+-    bindLabel.setText("Bind");portLabel.setText("Port");
+-    nearbyLabel.setText("Nearby rooms — select a room to fill its address");addressLabel.setText("Host address (hostname or IPv4:port)");passwordLabel.setText("Password (if required)");
++    setTitle("F-Zero VS");setSize({640,560});setMinimumSize({600,520});setDismissable();
++    layout.setPadding(10);play.setPadding(10);diagnostics.setPadding(10);
++    playTab.setText("Play");diagnosticsTab.setText("Diagnostics");
++    for(auto sizable:std::vector<Sizable>{setup,room,hostForm,joinForm,networkFields,formMessage,create,joinButton,cancel,hostControls,editFields,roomMessage,next,emptyStats,liveStats,details})sizable.setCollapsible();
++    room.setVisible(false);chooseHost.setText("Host").setChecked();chooseJoin.setText("Join");
++    chooseHost.onActivate([&]{updateSetup();});chooseJoin.onActivate([&]{updateSetup();});
++    nameLabel.setText("Room name");playersLabel.setText("Players");trackLabel.setText("Track");
++    keyLabel.setText("Password (optional)");bindLabel.setText("Bind");portLabel.setText("Port");
++    hostHelp.setText("You play as P1. The race starts when everyone selects a machine.");
+     auto& prefs=settings.multiplayer;
+-    if(!prefs.roomName) {char name[128]{};gethostname(name,sizeof(name)-1);prefs.roomName={name,"'s game"};}
++    if(!prefs.roomName){char name[128]{};gethostname(name,sizeof(name)-1);prefs.roomName=fzvs::defaultRoomName(name).c_str();}
+     roomName.setText(prefs.roomName);bindAddress.setText(prefs.bindAddress);port.setText({prefs.port});address.setText(prefs.lastAddress);
+-    for(unsigned n=2;n<=4;n++){ComboButtonItem item{&players};item.setText({n," players"});}
+-    players.item(std::clamp(prefs.players,2u,4u)-2).setSelected();
+-    for(auto name:trackNames){ComboButtonItem item{&track};item.setText(name);}
+-    track.item(std::min(prefs.league,2u)*5+std::min(prefs.track,4u)).setSelected();
+-    advanced.setText("Advanced network settings").onToggle([&]{networkFields.setVisible(advanced.checked());});networkFields.setVisible(false);
+-    hostButton.setText("Host game").onActivate([&]{begin(true);});joinButton.setText("Join game").onActivate([&]{begin(false);});
+-    leave.setText("Leave room").setEnabled(false).onActivate([&]{leaveSession(true);sessionMessage="Left room";hostKey.setText();key.setText();});
+-    apply.setText("Set race").onActivate([&]{unsigned index=track.selected().offset();fzvs::client.request(FZ_CONFIG,{(uint8_t)(players.selected().offset()+2),(uint8_t)(index%5),(uint8_t)(index/5)});});
++    for(unsigned n=2;n<=4;n++){ComboButtonItem a{&players},b{&roomPlayers};a.setText({n," players"});b.setText({n," players"});}
++    for(auto name:trackNames){ComboButtonItem a{&track},b{&roomTrack};a.setText(name);b.setText(name);}
++    players.item(std::clamp(prefs.players,2u,4u)-2).setSelected();track.item(std::min(prefs.league,2u)*5+std::min(prefs.track,4u)).setSelected();
++    advanced.setText("Advanced networking").onToggle([&]{networkFields.setVisible(advanced.checked());relayout();});networkFields.setVisible(false);
++    nearbyLabel.setText("Nearby games");rooms.setHeadered().setBordered();
++    for(auto name:{"Room","Players","Track","Availability"}){TableViewColumn column{&rooms};column.setText(name);}
++    rooms.column(0).setWidth(140).setExpandable();rooms.column(1).setWidth(55);rooms.column(2).setWidth(190).setExpandable();rooms.column(3).setWidth(100);
++    rooms.onChange([&]{if(!updatingRooms)if(auto selected=rooms.selected()){auto i=selected.offset();if(i<discovered.size())address.setText(discovered[i].address.c_str());}});
++    rooms.onActivate([&](auto){if(auto selected=rooms.selected()){auto i=selected.offset();if(i<discovered.size() && available(discovered[i]))begin(false);}});
++    retry.setText("Retry").onActivate([&]{fzvs::session.retryDiscovery();});
++    addressLabel.setText("Host address (port defaults to 12000)");passwordLabel.setText("Password (optional)");
++    create.setText("Create room").onActivate([&]{begin(true);});joinButton.setText("Join game").onActivate([&]{begin(false);});
++    cancel.setText("Cancel").onActivate([&]{leaveSession(false);sessionMessage="Connection cancelled";focusedGame=false;updateSetup();});cancel.setVisible(false);
++    leave.onActivate([&]{leaveSession(true);sessionMessage="Left room";focusedGame=false;applying=false;updateSetup();});
+     next.setText("Next race").onActivate([&]{fzvs::client.request(FZ_NEXT);});
+-    rooms.onChange([&]{if(auto selected=rooms.selected()) {auto i=selected.offset();if(i<discovered.size())address.setText(discovered[i].address.c_str());}});
+-    rooms.onActivate([&]{if(auto selected=rooms.selected()){auto i=selected.offset();if(i<discovered.size() && available(discovered[i]))begin(false);}});
+-    overlay.setText("Show RTT, jitter and loss HUD").setChecked(prefs.overlay).onToggle([&]{Program::Guard guard;prefs.overlay=overlay.checked();fzvs::client.config.overlay=overlay.checked();});
+-    for(auto name:{"Warnings","Info","Debug","Trace"}){ComboButtonItem item{&severity};item.setText(name);}severity.item(2).setSelected();
+-    events.setEditable(false);setSize({690,740});setDismissable();
+-    onClose([&]{setVisible(false);fzvs::session.browse(false);});
+-    tabs.onChange([&]{fzvs::session.browse(visible() && joinTab.selected());});
+-  }
+-  ~FZVSWindow() {
+-    // Native tab removal can emit selection callbacks. Disconnect callbacks
+-    // capturing this before member handles begin destruction.
+-    onClose();tabs.onChange();rooms.onChange();rooms.onActivate();panel.onActivate();
+-    tabs.reset();
++    addresses.setEditable(false).setWordWrap(false);
++    raceSettingsLabel.setText("Race settings");
++    apply.setText("Apply changes").onActivate([&]{
++      auto v=fzvs::client.view();unsigned n=roomPlayers.selected().offset()+2,index=roomTrack.selected().offset();
++      if(!fzvs::validRoomChange(v,n,index%5,index/5))return;
++      fzvs::client.request(FZ_CONFIG,{(uint8_t)n,(uint8_t)(index%5),(uint8_t)(index/5)});
++      requestedPlayers=n;requestedTrack=index%5;requestedLeague=index/5;applying=true;appliedAt=chrono::millisecond();requestMessage="Applying race settings…";
++    });
++    emptyStats.setText("Connect to a room to see network statistics");
++    technical.setText("Technical details").onToggle([&]{details.setVisible(technical.checked());relayout();});details.setVisible(false);details.setEditable(false);
++    overlay.setText("Show RTT, jitter and loss HUD").setChecked(prefs.overlay).onToggle([&]{Program::Guard guard;settings.multiplayer.overlay=overlay.checked();fzvs::client.config.overlay=overlay.checked();});
++    logLabel.setText("Log level");for(auto name:{"Warnings","Info","Debug","Trace"}){ComboButtonItem item{&severity};item.setText(name);}severity.item(1).setSelected();
++    pauseLog.setText("Pause log");events.setEditable(false);
++    onClose([&]{setVisible(false);fzvs::session.browse(false);});tabs.onChange([&]{updateBrowse();});updateSetup();
+   }
++  ~FZVSWindow(){onClose();tabs.onChange();rooms.onChange();rooms.onActivate();panel.onActivate();tabs.reset();}
++  void relayout(){layout.setGeometry(layout.geometry());if(joinForm.visible())rooms.resizeColumns();}
++  void updateBrowse(){fzvs::session.browse(visible() && playTab.selected() && chooseJoin.checked() && !managedSession);}
++  void updateSetup(){bool host=chooseHost.checked();hostForm.setVisible(host);joinForm.setVisible(!host);create.setVisible(host);joinButton.setVisible(!host);updateBrowse();relayout();}
+   static bool available(const fzvs::Room& r){return r.version==FZ_VERSION && r.phase==FZ_LOBBY && r.occupied<r.players;}
+   void begin(bool hosting) {
+     Program::Guard guard;if(managedSession)return;
+@@ -162,7 +202,10 @@ struct FZVSWindow : Window {
+     } else if(!address.text()){sessionMessage="Choose a nearby room or enter hostname:port";return;}
+     if((hosting?options.key.size():key.text().size())>FZ_KEY_MAX){sessionMessage="Room password is too long (maximum 64 bytes)";return;}
+     if(!ensureROM())return;
+-    activateSession();
++    joinedName=hosting?roomName.text():string{"F-Zero VS room"};joinedAddress=address.text();
++    if(!hosting)for(auto& r:discovered)if(r.address==std::string(address.text().data())){joinedName=r.name.c_str();break;}
++    focusedGame=false;applying=false;requestMessage={};
++    activateSession();updateBrowse();
+     if(hosting) {
+       auto& prefs=settings.multiplayer;prefs.roomName=options.name.c_str();prefs.bindAddress=options.bind.c_str();prefs.port=options.port;
+       prefs.players=options.players;prefs.track=options.track;prefs.league=options.league;
+@@ -173,20 +216,11 @@ struct FZVSWindow : Window {
+   }
+ };
+ static std::unique_ptr<FZVSWindow> networkWindow;
+-auto fzvsShutdown() -> void {
+-  leaveSession(false);
+-  fzvs::session.shutdown();
+-  // Destroy native widgets on the GUI thread before application/static teardown.
+-  networkWindow.reset();
+-}
++auto fzvsShutdown() -> void {leaveSession(false);fzvs::session.shutdown();networkWindow.reset();}
+ auto fzvsCreateUI() -> void {
+-  // The menu exists even when launched without networking flags.
+-  fzvs::client.config.enabled=false;
+-  networkWindow=std::make_unique<FZVSWindow>();fzvs::session.start();
+-  networkWindow->menu.setText("Multiplayer");
+-  networkWindow->panel.setText("F-Zero VS…").onActivate([]{
+-    networkWindow->setAlignment(presentation,Alignment::Center);networkWindow->setVisible();networkWindow->setFocused();
+-    fzvs::session.browse(networkWindow->joinTab.selected());
++  fzvs::client.config.enabled=false;networkWindow=std::make_unique<FZVSWindow>();fzvs::session.start();
++  networkWindow->menu.setText("Multiplayer");networkWindow->panel.setText("F-Zero VS…").onActivate([]{
++    networkWindow->setAlignment(presentation,Alignment::Center);networkWindow->setVisible();networkWindow->setFocused();networkWindow->updateBrowse();
+   });
+   if(fzvs::startup.requested || !fzvs::client.config.profile.empty()) {
+     auto& c=fzvs::client.config;auto area=Monitor::workspace(0);
+@@ -198,50 +232,101 @@ auto fzvsCreateUI() -> void {
+ auto fzvsBootstrap() -> void {
+   if(!fzvs::startup.requested)return;
+   auto& w=*networkWindow;auto& c=fzvs::client.config;auto& h=fzvs::startup.options;
+-  if(fzvs::startup.hosting) {
+-    if(!h.name.empty())w.roomName.setText(h.name.c_str());w.bindAddress.setText(h.bind.c_str());w.port.setText({h.port});
+-    w.players.item(h.players-2).setSelected();w.track.item(h.league*5+h.track).setSelected();w.hostKey.setText(c.key.c_str());
+-  } else {w.address.setText(c.address.c_str());w.key.setText(c.key.c_str());}
+-  w.begin(fzvs::startup.hosting);
++  if(fzvs::startup.hosting){w.chooseHost.setChecked();if(!h.name.empty())w.roomName.setText(h.name.c_str());w.bindAddress.setText(h.bind.c_str());w.port.setText({h.port});w.players.item(h.players-2).setSelected();w.track.item(h.league*5+h.track).setSelected();w.hostKey.setText(c.key.c_str());}
++  else {w.chooseJoin.setChecked();w.address.setText(c.address.c_str());w.key.setText(c.key.c_str());}
++  w.updateSetup();w.begin(fzvs::startup.hosting);
+ }
+ auto fzvsRefreshUI() -> void {
+   if(!networkWindow)return;
+   if(auto connection=fzvs::session.takeConnection()) {
+     Program::Guard guard;
+-    if(managedSession) {
+-      auto& c=fzvs::client.config;c.address=connection->address;c.key=connection->key;c.ownerNonce=connection->ownerNonce;
++    if(managedSession){auto& c=fzvs::client.config;c.address=connection->address;c.key=connection->key;c.ownerNonce=connection->ownerNonce;
+       if(!fzvsAttach()){sessionMessage=fzvs::client.view().message.c_str();leaveSession(false);}else program.paused=false;
+     }
+   }
+   static uint64_t last=0;auto now=chrono::millisecond();if(now-last<200)return;last=now;
+   auto v=fzvs::client.view();auto s=fzvs::session.view();auto& w=*networkWindow;
+-  if(managedSession && (v.game=="disconnected" || s.state=="error")) {sessionMessage=(v.game=="disconnected"?v.message:s.message).c_str();leaveSession(false);}
+-  if(managedSession && v.connected){fzvs::session.connected();if(!s.hosting)settings.multiplayer.lastAddress=w.address.text();}
+-  if(managedSession && v.player>=0) {
+-    string identity{"YOU: P",v.player+1," • ",fz_player_color(v.player)," • ",fz_selected_car_name(v.peers[v.player].status,v.peers[v.player].car)};
++  if(!v.events.empty())w.lastClientLog=v.events.c_str();
++  if(managedSession && (v.game=="disconnected" || s.state=="error")) {
++    sessionMessage=(v.game=="disconnected"?v.message:s.message).c_str();leaveSession(false);v=fzvs::client.view();w.focusedGame=false;w.updateBrowse();
++  }
++  bool connected=managedSession && v.connected,busy=managedSession && !connected;
++  auto room=fzvs::presentRoom(v);
++  w.setup.setVisible(!connected);w.room.setVisible(connected);
++  w.chooser.setEnabled(!managedSession);w.hostForm.setEnabled(!managedSession);w.joinForm.setEnabled(!managedSession);
++  w.create.setEnabled(!managedSession);w.joinButton.setEnabled(!managedSession);w.cancel.setVisible(busy);
++  string message=busy?string{fzvs::connectionProgress(s.state,w.chooseHost.checked()).c_str()}:sessionMessage;
++  w.formMessage.setText(message).setVisible((bool)message);
++  if(connected) {
++    fzvs::session.connected();if(!s.hosting)settings.multiplayer.lastAddress=w.joinedAddress;
++    if(!w.focusedGame) {
++      w.focusedGame=true;w.playTab.setSelected();w.roomPlayers.item(std::clamp(v.expected,2,4)-2).setSelected();w.roomTrack.item(v.league*5+v.track).setSelected();
++      w.relayout();presentation.setFocused();
++    }
++    w.roomTitle.setText(w.joinedName);
++    w.roomDetails.setText({trackNames[v.league*5+v.track],"  ·  ",room.occupied,"/",v.expected," players"});
++    w.guidance.setText(room.guidance.c_str());
++    string identity{"You are P",v.player+1,"  ·  ",fz_player_color(v.player),"  ·  ",fz_selected_car_name(v.peers[v.player].status,v.peers[v.player].car)};
+     w.identity.setText(identity);presentation.setTitle({fzvs::client.config.label.c_str()," — ",identity});
+-  } else w.identity.setText("F-Zero VS multiplayer");
+-  w.status.setText({s.state.c_str()," • ",sessionMessage ? sessionMessage : string{s.message.c_str()}});
+-  w.leave.setText(s.hosting?"Stop hosting and end room":"Leave / cancel connection").setEnabled(managedSession);
+-  bool idle=!managedSession && (s.state=="idle" || s.state=="error");w.hostButton.setEnabled(idle);w.joinButton.setEnabled(idle);
+-  w.apply.setEnabled(managedSession && v.connected && v.player==v.host && v.phase==FZ_LOBBY);
+-  w.next.setEnabled(managedSession && v.connected && v.player==v.host && (v.phase==FZ_RESULTS || v.phase==FZ_LOBBY));
+-  w.addresses.setText(s.hosting ? string{"Guests can connect to:\n",s.addresses.c_str()} : string{"Hosting ends when you unload F-Zero or close Ares."});
+-  w.discoveryStatus.setText(s.discoveryWarning.empty()?"Rooms refresh every two seconds. You can also enter an address.":s.discoveryWarning.c_str());
++    string roster;for(auto& player:room.players){if(roster)roster.append("\n");roster.append(player.c_str());}w.roster.setText(roster);
++    w.connectionLabel.setText(s.hosting?"Connection addresses":"Connected to");
++    string addresses;
++    if(s.hosting) {
++      auto list=nall::split(s.addresses.c_str(),"\n");for(auto& a:list)if(a)addresses.append(a.beginsWith("127.")?"This computer only: ":"LAN: ",a,"\n");
++
++    } else addresses=fzvs::client.config.address.c_str();
++    if(w.addresses.text()!=addresses)w.addresses.setText(addresses);
++    w.hostControls.setVisible(v.player==v.host);w.editFields.setEnabled(room.canConfigure && !w.applying);
++    unsigned n=w.roomPlayers.selected().offset()+2,index=w.roomTrack.selected().offset();
++    w.apply.setEnabled(!w.applying && fzvs::validRoomChange(v,n,index%5,index/5));
++    if(w.applying) {
++      if(v.expected==(int)w.requestedPlayers && v.track==(int)w.requestedTrack && v.league==(int)w.requestedLeague) {
++        w.applying=false;w.requestMessage="Race settings updated";settings.multiplayer.players=v.expected;settings.multiplayer.track=v.track;settings.multiplayer.league=v.league;
++      } else if(!room.canConfigure || now-w.appliedAt>4000) {w.applying=false;w.requestMessage="Settings were not applied. Check the current room and try again.";}
++    }
++    w.roomMessage.setText(w.requestMessage).setVisible((bool)w.requestMessage);
++    w.next.setVisible(room.canNext);w.leave.setText(s.hosting?"Stop hosting":"Leave room");
++  }
++  using Phase=fzvs::DiscoveryPhase;
++  const char* discovery="Searching for nearby games…";
++  if(s.discovery.phase==Phase::Unavailable)discovery="Nearby games unavailable. Enter a host address.";
++  else if(s.discovery.phase==Phase::Empty)discovery="No nearby games found. You can enter a host address.";
++  else if(s.discovery.phase==Phase::Rooms)discovery="Choose a game or enter a host address.";
++  w.discoveryStatus.setText(discovery);
+   uint64_t selected=0;if(auto item=w.rooms.selected())if(item.offset()<w.discovered.size())selected=w.discovered[item.offset()].session;
+   string signature;for(auto& r:s.rooms)signature.append(r.session,"/",r.name.c_str(),"/",r.address.c_str(),"/",r.occupied,"/",r.players,"/",r.phase,"/",r.track,"/",r.league,"/",r.password,"/",r.version,";");
+   if(signature!=w.roomSignature) {
+-    w.roomSignature=signature;w.discovered=s.rooms;w.rooms.reset();
+-    for(auto& r:w.discovered){ListViewItem item{&w.rooms};item.setText({r.name.c_str()," • ",r.address.c_str()," • ",r.occupied,"/",r.players," • ",fz_phase_name(r.phase)," • ",trackNames[r.league*5+r.track],r.password?" • password":"",r.version!=FZ_VERSION?" • incompatible":r.phase!=FZ_LOBBY?" • unavailable":r.occupied>=r.players?" • full":" • open"});if(r.session==selected)item.setSelected();}
++    w.roomSignature=signature;w.updatingRooms=true;
++    // Preserve native row objects when only occupancy/status changes.
++    bool same=s.rooms.size()==w.discovered.size();if(same)for(size_t i=0;i<s.rooms.size();i++)if(s.rooms[i].session!=w.discovered[i].session)same=false;
++    if(!same){while(w.rooms.itemCount())w.rooms.remove(w.rooms.item(w.rooms.itemCount()-1));}
++    w.discovered=s.rooms;
++    for(unsigned i=0;i<w.discovered.size();i++) {
++      auto& r=w.discovered[i];TableViewItem item;
++      if(same)item=w.rooms.item(i);else {w.rooms.append(item);for(int c=0;c<4;c++){TableViewCell cell{&item};}}
++      item.cell(0).setText(r.name.c_str());item.cell(1).setText({r.occupied,"/",r.players});item.cell(2).setText(trackNames[r.league*5+r.track]);
++      item.cell(3).setText(r.version!=FZ_VERSION?"Incompatible":r.phase!=FZ_LOBBY?"In progress":r.occupied>=r.players?"Full":r.password?"Password":"Open");
++      if(r.session==selected)item.setSelected();
++    }
++    w.updatingRooms=false;w.rooms.resizeColumns();
++  }
++  w.emptyStats.setVisible(!connected);w.liveStats.setVisible(connected);
++  char metrics[512];
++  if(connected) {
++    snprintf(metrics,sizeof(metrics),"Connection   RTT %.1f ms  ·  Jitter %.1f ms  ·  Loss %.1f%%\n%.1f frames/s",v.rtt,v.jitter,v.loss,v.fps);w.connectionStats.setText(metrics);
++    string peers{"Players"};for(int i=0;i<v.expected;i++)if(v.peers[i].status && v.peers[i].status!=FZ_DISCONNECTED)peers.append("\nP",i+1,"  ",fz_selected_car_name(v.peers[i].status,v.peers[i].car));w.playerStats.setText(peers);
++    string server;if(s.hosting){server={"Hosted server   ",s.server.occupied,"/",s.server.players," players"};for(int i=0;i<4;i++)if(s.server.peers[i].status){snprintf(metrics,sizeof(metrics),"\nP%d  RTT %.1f ms  ·  Jitter %.1f ms",i+1,s.server.peers[i].rtt_ms,s.server.peers[i].jitter_ms);server.append(metrics);}}
++    w.serverStats.setText(server).setCollapsible().setVisible(s.hosting);
+   }
+-  string roster;for(int i=0;i<4;i++)roster.append("P",i+1,i==v.player?" [YOU] ":" ",fz_player_color(i)," • ",fz_selected_car_name(v.peers[i].status,v.peers[i].car)," • ",fz_status_name(v.peers[i].status)," • age ",v.peers[i].age," ms",i==v.host?" [HOST]":"","\n");w.roster.setText(roster);
+-  char metrics[768];snprintf(metrics,sizeof(metrics),"Client RTT %.1f ms • Jitter %.1f ms • Loss %.1f%% • %.1f fps\nRX %.1f/s • TX %.1f/s • %.1f KiB/s • retries %llu\nRace %u • %s • WRAM %02X/%02X/%02X • patches %u",v.rtt,v.jitter,v.loss,v.fps,v.rxRate,v.txRate,v.kbps,(unsigned long long)v.retries,v.race,v.game.c_str(),v.ram54,v.ram55,v.ram56,v.patches);w.stats.setText(metrics);
+-  auto& server=s.server;string serverInfo;
+-  if(s.hosting){serverInfo={"Server: ",server.occupied,"/",server.players," • RX ",server.rx," • TX ",server.tx," • rejected ",server.rejected," • stale ",server.stale,"\n"};for(int i=0;i<4;i++)if(server.peers[i].status){char line[120];snprintf(line,sizeof(line),"P%d RTT %.1f ms / jitter %.1f ms / update age %llu ms\n",i+1,server.peers[i].rtt_ms,server.peers[i].jitter_ms,(unsigned long long)server.peers[i].age_ms);serverInfo.append(line);}}
+-  else serverInfo="No local server";w.serverStats.setText(serverInfo);
+-  string log=v.events.c_str();const char* levels[]={"WARN","INFO","DEBUG","TRACE"};
++  snprintf(metrics,sizeof(metrics),"RX %.1f/s · TX %.1f/s · %.1f KiB/s · retries %llu\nRace %u · %s · WRAM %02X/%02X/%02X · patches %u\nServer RX %llu · TX %llu · rejected %llu\nDiscovery queries %llu · replies %llu",v.rxRate,v.txRate,v.kbps,(unsigned long long)v.retries,v.race,v.game.c_str(),v.ram54,v.ram55,v.ram56,v.patches,(unsigned long long)s.server.rx,(unsigned long long)s.server.tx,(unsigned long long)s.server.rejected,(unsigned long long)s.discovery.queries,(unsigned long long)s.discovery.replies);
++  string detail=metrics;for(auto& f:s.discovery.failures)detail.append("\n",f.operation.c_str()," [",f.interface.c_str(),"]: ",f.message.c_str()," (",f.code,")");
++  if(detail!=w.lastDetails){w.details.setText(detail);w.lastDetails=detail;}
++  string log=w.lastClientLog;const char* levels[]={"WARN","INFO","DEBUG","TRACE"};
+   for(auto& e:s.events)if(e.level<=(int)w.severity.selected().offset())log.append(e.time_us," ",levels[e.level]," race=",e.race," P",e.player+1," ",e.message,"\n");
+-  w.events.setText(log);
++  if(sessionMessage)log.append("\n",sessionMessage,"\n");
++  for(auto& f:s.discovery.failures)log.append("\nDiscovery: ",f.operation.c_str()," [",f.interface.c_str(),"] ",f.message.c_str()," (",f.code,")");
++  if(!w.pauseLog.checked() && log!=w.lastLog){w.events.setText(log);w.lastLog=log;}
++  w.relayout();
+ }
+ auto fzvsInput(ares::Node::Input::Input node) -> bool {
+   auto button=node->cast<ares::Node::Input::Button>();
+diff --git a/hiro/cocoa/widget/text-edit.cpp b/hiro/cocoa/widget/text-edit.cpp
+index 7b012e0..2fb253a 100644
+--- a/hiro/cocoa/widget/text-edit.cpp
++++ b/hiro/cocoa/widget/text-edit.cpp
+@@ -22,15 +22,16 @@
+ }
+ 
+ -(void) configure {
+-  [content setMinSize:NSMakeSize(0, 0)];
++  NSSize viewport = [self contentSize];
++  bool wrap = textEdit->wordWrap();
++  [content setMinSize:NSMakeSize(viewport.width, 0)];
+   [content setMaxSize:NSMakeSize(FLT_MAX, FLT_MAX)];
+-
+-  [[content textContainer] setContainerSize:NSMakeSize(FLT_MAX, FLT_MAX)];
+-  [[content textContainer] setWidthTracksTextView:textEdit->wordWrap()];
+-
+-  [content setHorizontallyResizable:YES];
++  [content setFrameSize:NSMakeSize(viewport.width, std::max(viewport.height, [content frame].size.height))];
++  [[content textContainer] setContainerSize:NSMakeSize(wrap ? viewport.width : FLT_MAX, FLT_MAX)];
++  [[content textContainer] setWidthTracksTextView:wrap];
++  [content setHorizontallyResizable:!wrap];
+   [content setVerticallyResizable:YES];
+-  [content setAutoresizingMask:NSViewNotSizable];
++  [content setAutoresizingMask:wrap ? NSViewWidthSizable : NSViewNotSizable];
+ 
+   [self setHasHorizontalScroller:!textEdit->wordWrap()];
+   [self setHasVerticalScroller:YES];
+@@ -83,7 +84,31 @@ auto pTextEdit::setGeometry(Geometry geometry) -> void {
+ }
+ 
+ auto pTextEdit::setText(const string& text) -> void {
+-  [[(CocoaTextEdit*)cocoaView content] setString:[NSString stringWithUTF8String:text]];
++  auto scroll = (CocoaTextEdit*)cocoaView;
++  auto content = [scroll content];
++  auto selection = [content selectedRange];
++  auto origin = [[scroll contentView] bounds].origin;
++  // Read-only diagnostics update live. Preserve a reader's selection and scroll
++  // position; follow appended text only when already at the bottom.
++  bool preserve = !state().editable;
++  bool follow = preserve && selection.length == 0 &&
++    NSMaxY([[scroll contentView] bounds]) >= NSMaxY([content bounds]) - 2;
++  [content setString:[NSString stringWithUTF8String:text]];
++  if(preserve) {
++    [[content layoutManager] ensureLayoutForTextContainer:[content textContainer]];
++    [content sizeToFit];
++    auto length = [[content string] length];
++    selection.location = std::min(selection.location, length);
++    selection.length = std::min(selection.length, length - selection.location);
++    [content setSelectedRange:selection];
++    if(follow) [content scrollRangeToVisible:NSMakeRange(length, 0)];
++    else {
++      auto viewport = [[scroll contentView] bounds].size;
++      origin.x = std::clamp(origin.x, (CGFloat)0, std::max((CGFloat)0, [content frame].size.width - viewport.width));
++      origin.y = std::clamp(origin.y, (CGFloat)0, std::max((CGFloat)0, [content frame].size.height - viewport.height));
++      [[scroll contentView] scrollToPoint:origin];[scroll reflectScrolledClipView:[scroll contentView]];
++    }
++  }
+ }
+ 
+ auto pTextEdit::setTextCursor(TextCursor cursor) -> void {

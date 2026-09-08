@@ -35,7 +35,10 @@ int main(int argc,char** argv) {
   for(int round=0;round<2;round++) {
     ids[0]->client.request(FZ_CONFIG,{4,(uint8_t)(round?4:0),(uint8_t)(round?2:0)});
     wait([&]{return ids[0]->client.view().track==(round?4:0);});
-    for(int id=0;id<4;id++) {auto& x=*ids[id];x.ram[0x55]=3;x.ram[0x5a]=std::array<uint8_t,4>{0,2,1,3}[id];}
+    // Repeat with duplicate Wild Goose selections: machine identity must remain
+    // independent of the player slot and its fixed multiplayer palette.
+    std::array<uint8_t,4> cars=round?std::array<uint8_t,4>{1,1,1,1}:std::array<uint8_t,4>{0,1,2,3};
+    for(int id=0;id<4;id++) {auto& x=*ids[id];x.ram[0x55]=3;x.ram[0x52]=cars[id];x.ram[0x5a]=std::array<uint8_t,4>{0,2,1,3}[cars[id]];}
     pump();
     for(auto& x:m) x.ram[0x55]=5;
     wait([&]{for(auto& x:m) if(x.client.view().game!="location-load")return false;return true;});
@@ -50,7 +53,9 @@ int main(int argc,char** argv) {
       assert(x.rom[0xd3f]==0&&x.rom[0x48ff]==0x80&&x.rom[0x4d84]==0x80);
       assert(x.rom[0x18795]==0x80&&x.rom[0x187fe]==0x80&&x.rom[0x187e6]==0x42);
       assert(x.ram[0x53]==(round?4:0)&&x.ram[0x5a]==(round?2:0));
-      for(int s=0;s<4;s++) {assert(x.ram[0xc41+s*2]==palette[id][s]);if(s)assert(x.ram[0x1131+s*2]==slots[id][s]);}
+      for(int s=0;s<4;s++) {assert(x.ram[0xc41+s*2]==palette[id][s]);if(s)assert(x.ram[0x1131+s*2]==cars[slots[id][s]]);}
+      assert(x.ram[0x52]==cars[id]);
+      for(int peer=0;peer<4;peer++)assert(x.client.view().peers[peer].car==cars[peer]);
       for(int n=0;n<6;n++)assert(x.rom[0xab1+n]==0xea);
       x.ram[0x54]=2;x.ram[0x55]=0;x.ram[0x56]=2;
       fz_put16(x.ram.data()+0xb70,(uint16_t)(1000+id));fz_put16(x.ram.data()+0xb90,(uint16_t)(2000+id));x.ram[0xbd1]=(uint8_t)(30+id);

@@ -1,0 +1,500 @@
+diff --git a/desktop-ui/CMakeLists.txt b/desktop-ui/CMakeLists.txt
+index 2f68d81..75a46b9 100644
+--- a/desktop-ui/CMakeLists.txt
++++ b/desktop-ui/CMakeLists.txt
+@@ -66,5 +66,8 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${desktop-ui_SOURCES})
+ 
+ add_sourcery_command(desktop-ui resource)
+ 
+-target_sources(desktop-ui PRIVATE fzvs.cpp "${FZVS_PROJECT_DIR}/client/fzvs_client.cpp")
++add_subdirectory("${FZVS_PROJECT_DIR}/server" "${CMAKE_BINARY_DIR}/fzvs-server")
++find_package(Threads REQUIRED)
++target_link_libraries(desktop-ui PRIVATE fzvs-server-core Threads::Threads)
++target_sources(desktop-ui PRIVATE fzvs.cpp "${FZVS_PROJECT_DIR}/client/fzvs_client.cpp" "${FZVS_PROJECT_DIR}/client/fzvs_session.cpp")
+ ares_configure_executable(desktop-ui)
+diff --git a/desktop-ui/desktop-ui.cpp b/desktop-ui/desktop-ui.cpp
+index f5f3a26..2b0bbe7 100644
+--- a/desktop-ui/desktop-ui.cpp
++++ b/desktop-ui/desktop-ui.cpp
+@@ -105,7 +105,20 @@ auto nall::main(Arguments arguments) -> void {
+   {
+     auto& c = fzvs::client.config;
+     string value;
+-    if(arguments.take("--fzvs-server", value)) { c.enabled = true; c.address = value.data(); }
++    if(arguments.take("--fzvs-server", value)) { c.enabled = true; c.address = value.data(); fzvs::startup.requested=true; }
++    if(arguments.take("--fzvs-host")) { c.enabled=true; fzvs::startup.requested=true; fzvs::startup.hosting=true; }
++    auto& host=fzvs::startup.options;
++    if(arguments.take("--fzvs-bind",value)) host.bind=value.data();
++    if(arguments.take("--fzvs-room-name",value)) host.name=value.data();
++    if(arguments.take("--fzvs-host-ready-file",value)) host.readyFile=value.data();
++    auto number=[&](const char* flag,unsigned& target,unsigned low,unsigned high) {
++      if(arguments.take(flag,value)) { unsigned n;char extra;
++        if(sscanf(value.data(),"%u%c",&n,&extra)!=1 || n<low || n>high) { print("Invalid ",flag,"\n");exit(2); } target=n;
++      }
++    };
++    number("--fzvs-players",host.players,2,4); number("--fzvs-port",host.port,1,65535);
++    number("--fzvs-track",host.track,0,4); number("--fzvs-league",host.league,0,2);
++    if(host.port==12001) { print("Port 12001 is reserved for discovery\n");exit(2); }
+     if(arguments.take("--fzvs-room-key", value)) c.key = value.data();
+     if(arguments.take("--fzvs-profile", value)) c.profile = value.data();
+     if(arguments.take("--fzvs-label", value)) c.label = value.data();
+@@ -125,7 +138,7 @@ auto nall::main(Arguments arguments) -> void {
+         print("Invalid --fzvs-window\n"); exit(2);
+       }
+     }
+-    if(c.enabled) {
++    if(c.enabled || !c.profile.empty()) {
+       setenv("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1", 1);
+       if(c.profile.empty()) c.profile = string{Path::userData(), "fzvs/"}.data();
+       for(auto dir : {"", "/Systems", "/saves", "/screenshots", "/debug"}) directory::create({c.profile.c_str(), dir, "/"});
+@@ -189,12 +202,10 @@ auto nall::main(Arguments arguments) -> void {
+     settings.process(true);
+   }
+ 
+-  if(fzvs::client.active()) {
++  if(!fzvs::client.config.profile.empty()) {
+     auto& c=fzvs::client.config;
+     settings.paths.home={c.profile.c_str(),"/Systems/"}; settings.paths.saves={c.profile.c_str(),"/saves/"};
+     settings.paths.screenshots={c.profile.c_str(),"/screenshots/"}; settings.paths.debugging={c.profile.c_str(),"/debug/"};
+-    settings.input.defocus="Allow"; settings.audio.mute=c.mute; settings.general.rewind=false; settings.general.runAhead=false;
+-    settings.debugServer.enabled=false; settings.boot.debugger=false; settings.boot.awaitGDBClient=false;
+     settings.video.adaptiveSizing=false; settings.video.windowWidth=c.width; settings.video.windowHeight=c.height;
+     program.startSaveStateSlot={};
+   }
+@@ -202,6 +213,8 @@ auto nall::main(Arguments arguments) -> void {
+ 
+   if(arguments.take("--help")) {
+     print("\n Usage: ares [OPTIONS]... game(s)\n\n");
++    print("Host: --fzvs-host --fzvs-players 2..4 --fzvs-port N --fzvs-bind IPv4\n");
++    print("  --fzvs-room-name NAME --fzvs-track 0..4 --fzvs-league 0..2 --fzvs-host-ready-file PATH\n");
+     print("F-Zero VS: --fzvs-server HOST:PORT --fzvs-room-key KEY --fzvs-profile DIR\n");
+     print("  --fzvs-label TEXT --fzvs-input keyboard|none|gamepad:N --fzvs-window X,Y,W,H\n");
+     print("  --fzvs-capture --fzvs-auto-next --fzvs-baseline (diagnostic: no game patches)\n");
+@@ -298,6 +311,7 @@ auto nall::main(Arguments arguments) -> void {
+ 
+   fzvsCreateUI();
+   program.create();
++  fzvsBootstrap();
+   Application::onMain(std::bind_front(&Program::main, &program));
+   Application::run();
+ 
+diff --git a/desktop-ui/desktop-ui.hpp b/desktop-ui/desktop-ui.hpp
+index d653b4f..0e05fab 100644
+--- a/desktop-ui/desktop-ui.hpp
++++ b/desktop-ui/desktop-ui.hpp
+@@ -21,6 +21,7 @@ namespace ruby {
+ }
+ 
+ #include "fzvs_client.hpp"
++#include "fzvs_session.hpp"
+ #include "resource/resource.hpp"
+ #include "input/input.hpp"
+ #include "emulator/emulator.hpp"
+@@ -65,3 +66,7 @@ auto fzvsAttach() -> bool;
+ auto fzvsCreateUI() -> void;
+ auto fzvsRefreshUI() -> void;
+ auto fzvsInput(ares::Node::Input::Input node) -> bool;
++
++auto fzvsBootstrap() -> void;
++auto fzvsOnUnload() -> void;
++auto fzvsShutdown() -> void;
+diff --git a/desktop-ui/fzvs.cpp b/desktop-ui/fzvs.cpp
+index 34670ff..a0f773d 100644
+--- a/desktop-ui/fzvs.cpp
++++ b/desktop-ui/fzvs.cpp
+@@ -1,112 +1,235 @@
+ #include "desktop-ui.hpp"
+ #include <nall/hash/sha256.hpp>
++#include <unistd.h>
+ 
+-auto fzvsAttach() -> bool {
+-  if(!emulator || emulator->name!="Super Famicom") { fzvs::client.failure("Multiplayer requires Super Famicom"); return false; }
++static const char *trackNames[]={"Knight — Mute City I","Knight — Big Blue","Knight — Sand Ocean","Knight — Death Wind I","Knight — Silence",
++      "Queen — Mute City II","Queen — Port Town I","Queen — Red Canyon I","Queen — White Land I","Queen — White Land II",
++      "King — Mute City III","King — Death Wind II","King — Port Town II","King — Red Canyon II","King — Fire Field"};
++
++static bool managedSession=false;
++static string sessionMessage;
++struct SavedNetworkSettings {
++  string defocus;
++  bool mute,rewind,runAhead,debugger,bootDebugger,awaitDebugger,paused;
++} savedNetworkSettings;
++
++static auto memoryAdapter(fzvs::Memory& memory,string& error) -> bool {
++  if(!emulator || emulator->name!="Super Famicom") { error="Load the supported F-Zero US ROM"; return false; }
+   ares::Node::Debugger::Memory ram,rom;
+   for(auto node:ares::Node::enumerate<ares::Node::Debugger::Memory>(emulator->root)) {
+     if(node->name()=="CPU WRAM") ram=node;
+     if(node->name()=="Cartridge ROM") rom=node;
+   }
+-  if(!ram || !rom || ram->size()!=128*1024 || rom->size()!=512*1024) {
+-    fzvs::client.failure("Unsupported ROM or missing emulator memory adapter"); return false;
+-  }
++  if(!ram || !rom || ram->size()!=128*1024 || rom->size()!=512*1024) { error="Unsupported ROM: F-Zero US original revision required"; return false; }
+   std::vector<uint8_t> bytes(rom->size());
+   for(unsigned i=0;i<bytes.size();i++) bytes[i]=rom->read(i);
+   if(Hash::SHA256(bytes).digest()!="bf16c3c867c58e2ab061c70de9295b6930d63f29f81cc986f5ecae03e0ad18d2") {
+-    fzvs::client.failure("ROM SHA-256 mismatch: F-Zero US original revision required"); return false;
++    error="ROM SHA-256 mismatch: F-Zero US original revision required"; return false;
+   }
+-  fzvs::Memory memory;
+   memory.ram=[ram](uint32_t a) -> uint8_t { return a<ram->size() ? (uint8_t)ram->read(a) : 0; };
+   memory.rom=[rom](uint32_t a) -> uint8_t { return a<rom->size() ? (uint8_t)rom->read(a) : 0; };
+   memory.writeRam=[ram](uint32_t a,uint8_t v) { if(a<ram->size()) ram->write(a,v); };
+   memory.writeRom=[rom](uint32_t a,uint8_t v) { if(a<rom->size()) rom->write(a,v); };
+-  memory.reset=[] { emulator->root->power(true); };
++  memory.reset=[] { if(emulator) emulator->root->power(true); };
++  return true;
++}
++auto fzvsAttach() -> bool {
++  fzvs::Memory memory;string error;
++  if(!memoryAdapter(memory,error)) { fzvs::client.failure(error.data()); return false; }
+   return fzvs::client.attach(std::move(memory));
+ }
++static auto ensureROM() -> bool {
++  fzvs::Memory memory;string error;
++  if(memoryAdapter(memory,error)) { settings.multiplayer.romPath=emulator->game->location; return true; }
++  auto load=[&](const string& path) {
++    if(auto system=program.identify(path)) if(program.load(system,path) && memoryAdapter(memory,error)) {
++      settings.multiplayer.romPath=path; return true;
++    }
++    return false;
++  };
++  if(settings.multiplayer.romPath && file::exists(settings.multiplayer.romPath) && load(settings.multiplayer.romPath))return true;
++  BrowserDialog dialog;dialog.setTitle("Select F-Zero US original revision");dialog.setAlignment(presentation);
++  dialog.setFilters({"SNES ROM|*.smc:*.sfc:*.SMC:*.SFC"});
++  if(auto path=program.openFile(dialog)) { if(load(path))return true;sessionMessage=error; }
++  else sessionMessage="ROM selection cancelled";
++  return false;
++}
++static auto activateSession() -> void {
++  auto& old=savedNetworkSettings;
++  old={settings.input.defocus,settings.audio.mute,settings.general.rewind,settings.general.runAhead,
++    settings.debugServer.enabled,settings.boot.debugger,settings.boot.awaitGDBClient,program.paused};
++  settings.input.defocus="Allow";settings.general.rewind=false;settings.general.runAhead=false;
++  settings.debugServer.enabled=false;settings.boot.debugger=false;settings.boot.awaitGDBClient=false;
++  nall::GDB::server.close();program.rewindReset();program.runAheadUpdate();program.startSaveStateSlot={};
++  settings.audio.mute=fzvs::client.config.mute || old.mute;
++  fzvs::client.config.overlay=settings.multiplayer.overlay;fzvs::client.config.enabled=true;
++  managedSession=true;sessionMessage={};
++}
++static auto leaveSession(bool reset) -> void {
++  Program::Guard guard;
++  if(!managedSession)return;
++  fzvs::client.detach();fzvs::client.config.enabled=false;fzvs::client.config.ownerNonce=0;fzvs::client.config.key.clear();
++  fzvs::session.shutdown();managedSession=false;
++  auto& old=savedNetworkSettings;
++  settings.input.defocus=old.defocus;settings.audio.mute=old.mute;settings.general.rewind=old.rewind;settings.general.runAhead=old.runAhead;
++  settings.debugServer.enabled=old.debugger;settings.boot.debugger=old.bootDebugger;settings.boot.awaitGDBClient=old.awaitDebugger;
++  program.paused=old.paused;program.runAheadUpdate();program.rewindReset();
++  if(reset && emulator)emulator->root->power(true);
++  if(old.debugger && emulator)nall::GDB::server.open(settings.debugServer.port,settings.debugServer.useIPv4);
++  if(emulator)presentation.setTitle({ares::Name," — ",Location::prefix(emulator->game->location)});
++}
++auto fzvsOnUnload() -> void { leaveSession(false); }
++auto fzvsShutdown() -> void { leaveSession(false);fzvs::session.shutdown(); }
+ 
+ struct FZVSWindow : Window {
+-  Menu menu{&presentation.menuBar};
+-  MenuItem panel{&menu};
++  Menu menu{&presentation.menuBar};MenuItem panel{&menu};
+   VerticalLayout layout{this};
+   Label identity{&layout,Size{~0,0}};
+-  HorizontalLayout connection{&layout,Size{~0,0}};
+-  LineEdit address{&connection,Size{~0,0}};
+-  LineEdit key{&connection,Size{140,0}};
+-  Button reconnect{&connection,Size{110,0}};
+-  Label roster{&layout,Size{~0,110}};
+-  HorizontalLayout controls{&layout,Size{~0,0}};
+-  ComboButton players{&controls,Size{80,0}};
+-  ComboButton track{&controls,Size{~0,0}};
+-  Button apply{&controls,Size{100,0}};
+-  Button next{&controls,Size{110,0}};
+-  CheckLabel overlay{&layout,Size{~0,0}};
+-  Label stats{&layout,Size{~0,90}};
+-  Label game{&layout,Size{~0,60}};
+-  TextEdit events{&layout,Size{~0,190}};
++  Label status{&layout,Size{~0,48}};
++  Button leave{&layout,Size{~0,0}};
++  TabFrame tabs{&layout,Size{~0,~0}};
++  TabFrameItem hostTab{&tabs},joinTab{&tabs},diagnosticsTab{&tabs};
++  VerticalLayout hostLayout{&hostTab},joinLayout{&joinTab},diagnosticsLayout{&diagnosticsTab};
++  Label nameLabel{&hostLayout,Size{~0,0}};LineEdit roomName{&hostLayout,Size{~0,0}};
++  Label playersLabel{&hostLayout,Size{~0,0}};ComboButton players{&hostLayout,Size{~0,0}};
++  Label trackLabel{&hostLayout,Size{~0,0}};ComboButton track{&hostLayout,Size{~0,0}};
++  Label keyLabel{&hostLayout,Size{~0,0}};LineEdit hostKey{&hostLayout,Size{~0,0}};
++  CheckLabel advanced{&hostLayout,Size{~0,0}};
++  HorizontalLayout networkFields{&hostLayout,Size{~0,0}};
++  Label bindLabel{&networkFields,Size{50,0}};LineEdit bindAddress{&networkFields,Size{~0,0}};
++  Label portLabel{&networkFields,Size{45,0}};LineEdit port{&networkFields,Size{90,0}};
++  Button hostButton{&hostLayout,Size{~0,0}};
++  Label addresses{&hostLayout,Size{~0,65}};
++  HorizontalLayout raceControls{&hostLayout,Size{~0,0}};
++  Button apply{&raceControls,Size{~0,0}},next{&raceControls,Size{~0,0}};
++  Label nearbyLabel{&joinLayout,Size{~0,0}};ListView rooms{&joinLayout,Size{~0,200}};
++  Label addressLabel{&joinLayout,Size{~0,0}};LineEdit address{&joinLayout,Size{~0,0}};
++  Label passwordLabel{&joinLayout,Size{~0,0}};LineEdit key{&joinLayout,Size{~0,0}};
++  Button joinButton{&joinLayout,Size{~0,0}};
++  Label discoveryStatus{&joinLayout,Size{~0,50}};
++  Label roster{&diagnosticsLayout,Size{~0,105}};
++  Label stats{&diagnosticsLayout,Size{~0,90}};
++  Label serverStats{&diagnosticsLayout,Size{~0,100}};
++  CheckLabel overlay{&diagnosticsLayout,Size{~0,0}};
++  ComboButton severity{&diagnosticsLayout,Size{~0,0}};
++  TextEdit events{&diagnosticsLayout,Size{~0,~0}};
++  std::vector<fzvs::Room> discovered;
++  string roomSignature;
+   FZVSWindow() {
+-    setTitle("F-Zero VS — Multiplayer"); layout.setPadding(12);
+-    address.setText(fzvs::client.config.address.c_str()); key.setText(fzvs::client.config.key.c_str());
+-    address.setToolTip("Server hostname:port"); key.setToolTip("Room key (private friends server)");
+-    reconnect.setText("Reconnect").onActivate([&] {
+-      Program::Guard guard;
+-      fzvs::client.detach();
+-      fzvs::client.config.address=address.text().data(); fzvs::client.config.key=key.text().data();
+-      if(fzvsAttach()) program.paused=false;
+-    });
+-    for(int n=2;n<=4;n++) { ComboButtonItem item{&players}; item.setText({n," players"}); }
+-    const char *names[]={"Knight — Mute City I","Knight — Big Blue","Knight — Sand Ocean","Knight — Death Wind I","Knight — Silence",
+-      "Queen — Mute City II","Queen — Port Town I","Queen — Red Canyon I","Queen — White Land I","Queen — White Land II",
+-      "King — Mute City III","King — Death Wind II","King — Port Town II","King — Red Canyon II","King — Fire Field"};
+-    for(auto name:names) { ComboButtonItem item{&track}; item.setText(name); }
+-    apply.setText("Set race").onActivate([&] {
+-      unsigned index=track.selected().offset(); fzvs::client.request(FZ_CONFIG,{(uint8_t)(players.selected().offset()+2),(uint8_t)(index%5),(uint8_t)(index/5)});
+-    });
+-    next.setText("Next race").onActivate([&] { fzvs::client.request(FZ_NEXT); });
+-    overlay.setText("Show network overlay (including fullscreen)").setChecked(true).onToggle([&] {
+-      Program::Guard guard; fzvs::client.config.overlay=overlay.checked();
+-    });
+-    events.setEditable(false); setSize({620,600}); setDismissable();
+-    onClose([&] { setVisible(false); });
++    setTitle("F-Zero VS — Multiplayer");layout.setPadding(12);
++    hostLayout.setPadding(10);joinLayout.setPadding(10);diagnosticsLayout.setPadding(10);
++    hostTab.setText("Host");joinTab.setText("Join");diagnosticsTab.setText("Diagnostics");
++    nameLabel.setText("Room name");playersLabel.setText("Total players (including you)");trackLabel.setText("Track");
++    keyLabel.setText("Room password (optional — leave empty for an open room)");
++    bindLabel.setText("Bind");portLabel.setText("Port");
++    nearbyLabel.setText("Nearby rooms — select a room to fill its address");addressLabel.setText("Host address (hostname or IPv4:port)");passwordLabel.setText("Password (if required)");
++    auto& prefs=settings.multiplayer;
++    if(!prefs.roomName) {char name[128]{};gethostname(name,sizeof(name)-1);prefs.roomName={name,"'s game"};}
++    roomName.setText(prefs.roomName);bindAddress.setText(prefs.bindAddress);port.setText({prefs.port});address.setText(prefs.lastAddress);
++    for(unsigned n=2;n<=4;n++){ComboButtonItem item{&players};item.setText({n," players"});}
++    players.item(std::clamp(prefs.players,2u,4u)-2).setSelected();
++    for(auto name:trackNames){ComboButtonItem item{&track};item.setText(name);}
++    track.item(std::min(prefs.league,2u)*5+std::min(prefs.track,4u)).setSelected();
++    advanced.setText("Advanced network settings").onToggle([&]{networkFields.setVisible(advanced.checked());});networkFields.setVisible(false);
++    hostButton.setText("Host game").onActivate([&]{begin(true);});joinButton.setText("Join game").onActivate([&]{begin(false);});
++    leave.setText("Leave room").setEnabled(false).onActivate([&]{leaveSession(true);sessionMessage="Left room";hostKey.setText();key.setText();});
++    apply.setText("Set race").onActivate([&]{unsigned index=track.selected().offset();fzvs::client.request(FZ_CONFIG,{(uint8_t)(players.selected().offset()+2),(uint8_t)(index%5),(uint8_t)(index/5)});});
++    next.setText("Next race").onActivate([&]{fzvs::client.request(FZ_NEXT);});
++    rooms.onChange([&]{if(auto selected=rooms.selected()) {auto i=selected.offset();if(i<discovered.size())address.setText(discovered[i].address.c_str());}});
++    rooms.onActivate([&]{if(auto selected=rooms.selected()){auto i=selected.offset();if(i<discovered.size() && available(discovered[i]))begin(false);}});
++    overlay.setText("Show RTT, jitter and loss HUD").setChecked(prefs.overlay).onToggle([&]{Program::Guard guard;prefs.overlay=overlay.checked();fzvs::client.config.overlay=overlay.checked();});
++    for(auto name:{"Warnings","Info","Debug","Trace"}){ComboButtonItem item{&severity};item.setText(name);}severity.item(2).setSelected();
++    events.setEditable(false);setSize({690,740});setDismissable();
++    onClose([&]{setVisible(false);fzvs::session.browse(false);});
++    tabs.onChange([&]{fzvs::session.browse(visible() && joinTab.selected());});
++  }
++  static bool available(const fzvs::Room& r){return r.version==FZ_VERSION && r.phase==FZ_LOBBY && r.occupied<r.players;}
++  void begin(bool hosting) {
++    Program::Guard guard;if(managedSession)return;
++    fzvs::HostOptions options;
++    if(hosting) {
++      unsigned n;char extra;
++      if(sscanf(port.text().data(),"%u%c",&n,&extra)!=1 || n<1 || n>65535 || n==12001){sessionMessage="Invalid game port; 12001 is reserved for discovery";return;}
++      options.port=n;options.bind=bindAddress.text().data();options.name=roomName.text().data();options.key=hostKey.text().data();
++      options.players=players.selected().offset()+2;unsigned index=track.selected().offset();options.track=index%5;options.league=index/5;
++      if(options.name.empty() || options.name.size()>63){sessionMessage="Enter a room name of 1–63 bytes";return;}
++    } else if(!address.text()){sessionMessage="Choose a nearby room or enter hostname:port";return;}
++    if((hosting?options.key.size():key.text().size())>FZ_KEY_MAX){sessionMessage="Room password is too long (maximum 64 bytes)";return;}
++    if(!ensureROM())return;
++    activateSession();
++    if(hosting) {
++      auto& prefs=settings.multiplayer;prefs.roomName=options.name.c_str();prefs.bindAddress=options.bind.c_str();prefs.port=options.port;
++      prefs.players=options.players;prefs.track=options.track;prefs.league=options.league;
++      options.logPath=std::string(Location::path(settings.filePath).data())+"host-server.log";
++      if(fzvs::startup.hosting)options.readyFile=fzvs::startup.options.readyFile;
++      if(!fzvs::session.host(std::move(options))){sessionMessage="Session request queue is full";leaveSession(false);}
++    } else if(!fzvs::session.join(address.text().data(),key.text().data())){sessionMessage="Session request queue is full";leaveSession(false);}
+   }
+ };
+ static std::unique_ptr<FZVSWindow> networkWindow;
+ auto fzvsCreateUI() -> void {
+-  if(!fzvs::client.active()) return;
+-  networkWindow=std::make_unique<FZVSWindow>();
++  // The menu exists even when launched without networking flags.
++  fzvs::client.config.enabled=false;
++  networkWindow=std::make_unique<FZVSWindow>();fzvs::session.start();
+   networkWindow->menu.setText("Multiplayer");
+-  networkWindow->panel.setText("Players and diagnostics").onActivate([] {
+-    networkWindow->setAlignment(presentation,Alignment::Center); networkWindow->setVisible(); networkWindow->setFocused();
++  networkWindow->panel.setText("Host, join and diagnostics").onActivate([]{
++    networkWindow->setAlignment(presentation,Alignment::Center);networkWindow->setVisible();networkWindow->setFocused();
++    fzvs::session.browse(networkWindow->joinTab.selected());
+   });
+-  auto& c=fzvs::client.config; auto area=Monitor::workspace(0);
+-  int width=std::min(c.width,(int)area.width()),height=std::min(c.height+24,(int)area.height()-30);
+-  int x=std::clamp(c.x,(int)area.x(),(int)(area.x()+area.width())-width);
+-  int y=std::clamp(c.y,(int)area.y(),(int)(area.y()+area.height())-height);
+-  presentation.setGeometry({(float)x,(float)y,(float)width,(float)height});
++  if(fzvs::startup.requested || !fzvs::client.config.profile.empty()) {
++    auto& c=fzvs::client.config;auto area=Monitor::workspace(0);
++    int width=std::min(c.width,(int)area.width()),height=std::min(c.height+24,(int)area.height()-30);
++    int x=std::clamp(c.x,(int)area.x(),(int)(area.x()+area.width())-width),y=std::clamp(c.y,(int)area.y(),(int)(area.y()+area.height())-height);
++    presentation.setGeometry({(float)x,(float)y,(float)width,(float)height});
++  }
++}
++auto fzvsBootstrap() -> void {
++  if(!fzvs::startup.requested)return;
++  auto& w=*networkWindow;auto& c=fzvs::client.config;auto& h=fzvs::startup.options;
++  if(fzvs::startup.hosting) {
++    if(!h.name.empty())w.roomName.setText(h.name.c_str());w.bindAddress.setText(h.bind.c_str());w.port.setText({h.port});
++    w.players.item(h.players-2).setSelected();w.track.item(h.league*5+h.track).setSelected();w.hostKey.setText(c.key.c_str());
++  } else {w.address.setText(c.address.c_str());w.key.setText(c.key.c_str());}
++  w.begin(fzvs::startup.hosting);
+ }
+ auto fzvsRefreshUI() -> void {
+-  if(!networkWindow) return;
+-  static uint32_t configurationRace=0;
+-  static int configuredPlayers=0,configuredTrack=-1;
+-  static uint64_t last=0; auto now=chrono::millisecond(); if(now-last<200) return; last=now;
+-  auto v=fzvs::client.view(); auto& w=*networkWindow;
+-  const char *colors[]={"Pink","Blue","Green","Yellow"};
+-  string identity=v.player>=0 ? string{"YOU: P",v.player+1," • ",colors[v.player]," • ",fz_selected_car_name(v.peers[v.player].status,v.peers[v.player].car)} : "Connecting";
+-  w.identity.setText(identity); presentation.setTitle({fzvs::client.config.label.c_str()," — ",identity});
+-  string roster;
+-  for(int i=0;i<4;i++) roster.append("P",i+1,i==v.player?" [YOU] ":" ",colors[i]," • ",fz_selected_car_name(v.peers[i].status,v.peers[i].car)," • ",fz_status_name(v.peers[i].status),
+-    " • update age ",v.peers[i].age," ms",i==v.host?" [HOST]":"","\n");
+-  w.roster.setText(roster);
+-  if(configurationRace!=v.race || configuredPlayers!=v.expected || configuredTrack!=v.league*5+v.track) {
+-    configurationRace=v.race; configuredPlayers=v.expected; configuredTrack=v.league*5+v.track;
+-    w.players.item(v.expected-2).setSelected(); w.track.item(configuredTrack).setSelected();
++  if(!networkWindow)return;
++  if(auto connection=fzvs::session.takeConnection()) {
++    Program::Guard guard;
++    if(managedSession) {
++      auto& c=fzvs::client.config;c.address=connection->address;c.key=connection->key;c.ownerNonce=connection->ownerNonce;
++      if(!fzvsAttach()){sessionMessage=fzvs::client.view().message.c_str();leaveSession(false);}else program.paused=false;
++    }
++  }
++  static uint64_t last=0;auto now=chrono::millisecond();if(now-last<200)return;last=now;
++  auto v=fzvs::client.view();auto s=fzvs::session.view();auto& w=*networkWindow;
++  if(managedSession && (v.game=="disconnected" || s.state=="error")) {sessionMessage=(v.game=="disconnected"?v.message:s.message).c_str();leaveSession(false);}
++  if(managedSession && v.connected){fzvs::session.connected();if(!s.hosting)settings.multiplayer.lastAddress=w.address.text();}
++  if(managedSession && v.player>=0) {
++    string identity{"YOU: P",v.player+1," • ",fz_player_color(v.player)," • ",fz_selected_car_name(v.peers[v.player].status,v.peers[v.player].car)};
++    w.identity.setText(identity);presentation.setTitle({fzvs::client.config.label.c_str()," — ",identity});
++  } else w.identity.setText("F-Zero VS multiplayer");
++  w.status.setText({s.state.c_str()," • ",sessionMessage ? sessionMessage : string{s.message.c_str()}});
++  w.leave.setText(s.hosting?"Stop hosting and end room":"Leave / cancel connection").setEnabled(managedSession);
++  bool idle=!managedSession && (s.state=="idle" || s.state=="error");w.hostButton.setEnabled(idle);w.joinButton.setEnabled(idle);
++  w.apply.setEnabled(managedSession && v.connected && v.player==v.host && v.phase==FZ_LOBBY);
++  w.next.setEnabled(managedSession && v.connected && v.player==v.host && (v.phase==FZ_RESULTS || v.phase==FZ_LOBBY));
++  w.addresses.setText(s.hosting ? string{"Guests can connect to:\n",s.addresses.c_str()} : string{"Hosting ends when you unload F-Zero or close Ares."});
++  w.discoveryStatus.setText(s.discoveryWarning.empty()?"Rooms refresh every two seconds. You can also enter an address.":s.discoveryWarning.c_str());
++  uint64_t selected=0;if(auto item=w.rooms.selected())if(item.offset()<w.discovered.size())selected=w.discovered[item.offset()].session;
++  string signature;for(auto& r:s.rooms)signature.append(r.session,"/",r.name.c_str(),"/",r.address.c_str(),"/",r.occupied,"/",r.players,"/",r.phase,"/",r.track,"/",r.league,"/",r.password,"/",r.version,";");
++  if(signature!=w.roomSignature) {
++    w.roomSignature=signature;w.discovered=s.rooms;w.rooms.reset();
++    for(auto& r:w.discovered){ListViewItem item{&w.rooms};item.setText({r.name.c_str()," • ",r.address.c_str()," • ",r.occupied,"/",r.players," • ",fz_phase_name(r.phase)," • ",trackNames[r.league*5+r.track],r.password?" • password":"",r.version!=FZ_VERSION?" • incompatible":r.phase!=FZ_LOBBY?" • unavailable":r.occupied>=r.players?" • full":" • open"});if(r.session==selected)item.setSelected();}
+   }
+-  w.apply.setEnabled(v.connected && v.player==v.host && v.phase==FZ_LOBBY);
+-  w.next.setEnabled(v.connected && v.player==v.host && (v.phase==FZ_RESULTS || v.phase==FZ_LOBBY));
+-  char metrics[512]; snprintf(metrics,sizeof(metrics),"RTT %.1f ms   Jitter %.1f ms   Estimated snapshot loss %.1f%%\nRX %.1f/s   TX %.1f/s   %.1f KiB/s   Emulation %.1f fps\nStale packets %llu   Control retries %llu",v.rtt,v.jitter,v.loss,v.rxRate,v.txRate,v.kbps,v.fps,(unsigned long long)v.stale,(unsigned long long)v.retries);
+-  w.stats.setText(metrics);
+-  char state[512]; snprintf(state,sizeof(state),"Race %u • Server: %s • Game: %s • Track %d/%d\nWRAM $54/$55/$56 = %02X/%02X/%02X • X/Y = %u/%u • Patched bytes %u",v.race,fz_phase_name(v.phase),v.game.c_str(),v.league,v.track,v.ram54,v.ram55,v.ram56,v.x,v.y,v.patches);
+-  w.game.setText(state); w.events.setText(v.events.c_str());
++  string roster;for(int i=0;i<4;i++)roster.append("P",i+1,i==v.player?" [YOU] ":" ",fz_player_color(i)," • ",fz_selected_car_name(v.peers[i].status,v.peers[i].car)," • ",fz_status_name(v.peers[i].status)," • age ",v.peers[i].age," ms",i==v.host?" [HOST]":"","\n");w.roster.setText(roster);
++  char metrics[768];snprintf(metrics,sizeof(metrics),"Client RTT %.1f ms • Jitter %.1f ms • Loss %.1f%% • %.1f fps\nRX %.1f/s • TX %.1f/s • %.1f KiB/s • retries %llu\nRace %u • %s • WRAM %02X/%02X/%02X • patches %u",v.rtt,v.jitter,v.loss,v.fps,v.rxRate,v.txRate,v.kbps,(unsigned long long)v.retries,v.race,v.game.c_str(),v.ram54,v.ram55,v.ram56,v.patches);w.stats.setText(metrics);
++  auto& server=s.server;string serverInfo;
++  if(s.hosting){serverInfo={"Server: ",server.occupied,"/",server.players," • RX ",server.rx," • TX ",server.tx," • rejected ",server.rejected," • stale ",server.stale,"\n"};for(int i=0;i<4;i++)if(server.peers[i].status){char line[120];snprintf(line,sizeof(line),"P%d RTT %.1f ms / jitter %.1f ms / update age %llu ms\n",i+1,server.peers[i].rtt_ms,server.peers[i].jitter_ms,(unsigned long long)server.peers[i].age_ms);serverInfo.append(line);}}
++  else serverInfo="No local server";w.serverStats.setText(serverInfo);
++  string log=v.events.c_str();const char* levels[]={"WARN","INFO","DEBUG","TRACE"};
++  for(auto& e:s.events)if(e.level<=(int)w.severity.selected().offset())log.append(e.time_us," ",levels[e.level]," race=",e.race," P",e.player+1," ",e.message,"\n");
++  w.events.setText(log);
+ }
+ auto fzvsInput(ares::Node::Input::Input node) -> bool {
+   auto button=node->cast<ares::Node::Input::Button>();
+diff --git a/desktop-ui/program/load.cpp b/desktop-ui/program/load.cpp
+index 66905bf..34397d8 100644
+--- a/desktop-ui/program/load.cpp
++++ b/desktop-ui/program/load.cpp
+@@ -156,13 +156,12 @@ auto Program::load(string location) -> bool {
+     }
+   }
+ 
+-  if(fzvs::client.active() && !fzvsAttach()) { paused=true; return false; }
+   return true;
+ }
+ 
+ auto Program::unload() -> void {
+   Program::Guard guard;
+-  if(fzvs::client.active()) fzvs::client.detach();
++  fzvsOnUnload();
+   if(!emulator) return;
+ 
+   nall::GDB::server.close();
+diff --git a/desktop-ui/program/program.cpp b/desktop-ui/program/program.cpp
+index 8c2da6e..a1c3521 100644
+--- a/desktop-ui/program/program.cpp
++++ b/desktop-ui/program/program.cpp
+@@ -181,6 +181,7 @@ auto Program::quit() -> void {
+   worker.join();
+   program._isRunning = false;
+   unload();
++  fzvsShutdown();
+   Application::processEvents();
+   Application::quit();
+ 
+diff --git a/desktop-ui/settings/settings.cpp b/desktop-ui/settings/settings.cpp
+index adb061a..b851911 100644
+--- a/desktop-ui/settings/settings.cpp
++++ b/desktop-ui/settings/settings.cpp
+@@ -54,6 +54,15 @@ auto Settings::process(bool load) -> void {
+       operator()(path).setValue(name); \
+     } \
+ 
++  bind(string, "Multiplayer/ROM", multiplayer.romPath);
++  bind(string, "Multiplayer/Room", multiplayer.roomName);
++  bind(string, "Multiplayer/LastAddress", multiplayer.lastAddress);
++  bind(string, "Multiplayer/Bind", multiplayer.bindAddress);
++  bind(natural, "Multiplayer/Port", multiplayer.port);
++  bind(natural, "Multiplayer/Players", multiplayer.players);
++  bind(natural, "Multiplayer/Track", multiplayer.track);
++  bind(natural, "Multiplayer/League", multiplayer.league);
++  bind(boolean, "Multiplayer/Overlay", multiplayer.overlay);
+   bind(string,  "Video/Driver", video.driver);
+   bind(string,  "Video/Monitor", video.monitor);
+   bind(string,  "Video/Format", video.format);
+diff --git a/desktop-ui/settings/settings.hpp b/desktop-ui/settings/settings.hpp
+index db32b01..c4838b3 100644
+--- a/desktop-ui/settings/settings.hpp
++++ b/desktop-ui/settings/settings.hpp
+@@ -12,6 +12,11 @@ struct Settings : Markup::Node {
+   auto process(bool load) -> void;
+ 
+   string filePath;
++  struct Multiplayer {
++    string romPath,roomName,lastAddress,bindAddress="0.0.0.0";
++    u32 port=12000,players=2,track=0,league=0;
++    bool overlay=true;
++  } multiplayer;
+ 
+   struct Video {
+     string driver;
+diff --git a/nall/nall/arguments.hpp b/nall/nall/arguments.hpp
+index c2baa9c..f8a7edc 100644
+--- a/nall/nall/arguments.hpp
++++ b/nall/nall/arguments.hpp
+@@ -67,7 +67,10 @@ inline auto Arguments::construct() -> void {
+     if(index && (arguments[index-1] == "--fzvs-profile" || arguments[index-1] == "--fzvs-room-key"
+       || arguments[index-1] == "--fzvs-label" || arguments[index-1] == "--fzvs-server"
+       || arguments[index-1] == "--fzvs-input" || arguments[index-1] == "--fzvs-window"
+-      || arguments[index-1] == "--fzvs-auto-car")) continue;
++      || arguments[index-1] == "--fzvs-auto-car" || arguments[index-1] == "--fzvs-bind"
++      || arguments[index-1] == "--fzvs-room-name" || arguments[index-1] == "--fzvs-host-ready-file"
++      || arguments[index-1] == "--fzvs-port" || arguments[index-1] == "--fzvs-players"
++      || arguments[index-1] == "--fzvs-track" || arguments[index-1] == "--fzvs-league")) continue;
+     argument = directory::resolveSymLink(argument);
+     if(directory::exists(argument)) {
+       argument.transform("\\", "/").trimRight("/").append("/");

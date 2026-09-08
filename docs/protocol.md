@@ -130,3 +130,44 @@ completed normally with separate settings/screenshots and approximately 60 fps.
 Its logs/captures are in `.local-tests/20260908-102939-b7y_z34f/` on the development
 machine (generated and ignored). Longer manual five-lap races, gamepad hardware,
 all fifteen tracks and real internet conditions remain separate acceptance work.
+
+## Hosted-room extensions (Milestone 2)
+
+Existing gameplay packet layouts and protocol version 1 remain unchanged. Two
+new packet types are appended; older clients ignore them and keep their timeout
+fallback:
+
+- `JOIN_REJECT` (9): payload is the HELLO nonce (`u64`) and reason (`u8`):
+  1 password, 2 full, 3 race underway, 4 owner starting, 5 protocol incompatible.
+  The client accepts this only before joining and only for its current nonce.
+- `ROOM_CLOSED` (10): one-byte reason (1 room ended), with the recipient's session
+  and token in the normal header. The client verifies these before restoring
+  patches and disconnecting. A missing notice uses the existing heartbeat timeout.
+
+Hosted servers reserve slot 0 using a random owner nonce, admit no guests before
+that owner registers, and end the room when P1 departs. Dedicated servers set no
+owner nonce and preserve their previous host reassignment behavior.
+
+Discovery uses a separate IPv4 UDP socket at `239.255.70.90:12001`, multicast TTL
+1 and reusable listener sockets. Game port 12001 is reserved. Browsers explicitly
+bind an ephemeral query socket, query every two seconds and expire entries after
+six seconds. Queries are 16 bytes; replies are unicast, 96 bytes. Multi-byte values
+are little-endian:
+
+| Offset | Query / reply |
+| --- | --- |
+| 0–3 | `FZVD` |
+| 4 | Discovery version 1 |
+| 5 | Type 1 query / 2 reply |
+| 6 | Gameplay protocol version |
+| 7 | Reserved zero |
+| 8–15 | Query nonce, echoed by replies |
+| 16–23 | Reply: server session ID |
+| 24–25 | Reply: game port |
+| 26–31 | Reply: phase, occupancy, expected players, track, league, password-required |
+| 32–95 | Reply: room name, at most 63 printable ASCII bytes plus zero padding |
+
+No password is advertised. Browsers key rooms by session ID and connect using the
+reply's source IPv4 address plus its game port; they do not trust a payload-supplied
+IP. Invalid lengths, versions and out-of-range metadata are ignored. At most 64
+rooms are retained. Listener/discovery failure does not disable direct joining.

@@ -14,6 +14,7 @@ namespace fzvs {
 struct Config {
   bool enabled=false,mute=false,overlay=true,capture=false,autoNext=false,baseline=false;
   std::string address="127.0.0.1:12000",key,profile,label="F-Zero VS",input="keyboard";
+  uint64_t ownerNonce=0; // supplied only by the in-process host controller
   int x=40,y=60,width=640,height=480,autoCar=-1;
 };
 struct Memory {

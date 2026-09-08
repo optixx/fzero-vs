@@ -1,3 +1,7 @@
 0001-fzvs-networking.patch
 0002-single-owner-status-footer.patch
 0003-show-machine-only-after-selection.patch
+0004-host-and-join.patch
+0005-fix-tab-teardown.patch
+0006-compact-room-ux.patch
+0007-clarify-player-color.patch

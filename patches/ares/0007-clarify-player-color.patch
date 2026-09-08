@@ -1,0 +1,13 @@
+diff --git a/desktop-ui/fzvs.cpp b/desktop-ui/fzvs.cpp
+index 13f2668..f82cfc7 100644
+--- a/desktop-ui/fzvs.cpp
++++ b/desktop-ui/fzvs.cpp
+@@ -266,7 +266,7 @@ auto fzvsRefreshUI() -> void {
+     w.roomTitle.setText(w.joinedName);
+     w.roomDetails.setText({trackNames[v.league*5+v.track],"  ·  ",room.occupied,"/",v.expected," players"});
+     w.guidance.setText(room.guidance.c_str());
+-    string identity{"You are P",v.player+1,"  ·  ",fz_player_color(v.player),"  ·  ",fz_selected_car_name(v.peers[v.player].status,v.peers[v.player].car)};
++    string identity{"You are P",v.player+1,"  ·  Player color: ",fz_player_color(v.player),"  ·  Machine: ",fz_selected_car_name(v.peers[v.player].status,v.peers[v.player].car)};
+     w.identity.setText(identity);presentation.setTitle({fzvs::client.config.label.c_str()," — ",identity});
+     string roster;for(auto& player:room.players){if(roster)roster.append("\n");roster.append(player.c_str());}w.roster.setText(roster);
+     w.connectionLabel.setText(s.hosting?"Connection addresses":"Connected to");

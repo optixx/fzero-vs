@@ -14,14 +14,16 @@ For manual play, use `make test-2p` and assign separate controllers with
 `RUN_ARGS='--input keyboard --input gamepad:0'`. Keyboard mappings and gamepad
 configuration are described in [local testing](docs/local-testing.md).
 
-Open **Multiplayer → Players and diagnostics** for identity, roster, race controls
-and networking metrics. A compact overlay also appears in fullscreen. Each local
+Open **Multiplayer → F-Zero VS…** to host a room, browse LAN rooms,
+or join a hostname/IP address. The host runs the C server inside Ares and owns P1.
+The same window provides race controls, roster, and client/server diagnostics. A compact overlay also appears in fullscreen. Each local
 instance has an isolated profile and log directory under `.local-tests/`.
 
 The US original-revision ROM must be supplied locally; the adapter validates its
 SHA-256 before patching. Patches modify the loaded ROM only and are restored on
 unload, disconnect and the next race.
 
+- [Hosting, joining and lifecycle](docs/hosting.md)
 - [Build and patch workflow](docs/building.md)
 - [Desktop harness, controls and remote server](docs/local-testing.md)
 - [Protocol, memory map and validation scope](docs/protocol.md)

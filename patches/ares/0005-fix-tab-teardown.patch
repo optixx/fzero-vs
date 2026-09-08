@@ -1,0 +1,66 @@
+diff --git a/desktop-ui/fzvs.cpp b/desktop-ui/fzvs.cpp
+index a0f773d..0d637bb 100644
+--- a/desktop-ui/fzvs.cpp
++++ b/desktop-ui/fzvs.cpp
+@@ -79,7 +79,7 @@ static auto leaveSession(bool reset) -> void {
+   if(emulator)presentation.setTitle({ares::Name," — ",Location::prefix(emulator->game->location)});
+ }
+ auto fzvsOnUnload() -> void { leaveSession(false); }
+-auto fzvsShutdown() -> void { leaveSession(false);fzvs::session.shutdown(); }
++
+ 
+ struct FZVSWindow : Window {
+   Menu menu{&presentation.menuBar};MenuItem panel{&menu};
+@@ -143,6 +143,12 @@ struct FZVSWindow : Window {
+     onClose([&]{setVisible(false);fzvs::session.browse(false);});
+     tabs.onChange([&]{fzvs::session.browse(visible() && joinTab.selected());});
+   }
++  ~FZVSWindow() {
++    // Native tab removal can emit selection callbacks. Disconnect callbacks
++    // capturing this before member handles begin destruction.
++    onClose();tabs.onChange();rooms.onChange();rooms.onActivate();panel.onActivate();
++    tabs.reset();
++  }
+   static bool available(const fzvs::Room& r){return r.version==FZ_VERSION && r.phase==FZ_LOBBY && r.occupied<r.players;}
+   void begin(bool hosting) {
+     Program::Guard guard;if(managedSession)return;
+@@ -167,12 +173,18 @@ struct FZVSWindow : Window {
+   }
+ };
+ static std::unique_ptr<FZVSWindow> networkWindow;
++auto fzvsShutdown() -> void {
++  leaveSession(false);
++  fzvs::session.shutdown();
++  // Destroy native widgets on the GUI thread before application/static teardown.
++  networkWindow.reset();
++}
+ auto fzvsCreateUI() -> void {
+   // The menu exists even when launched without networking flags.
+   fzvs::client.config.enabled=false;
+   networkWindow=std::make_unique<FZVSWindow>();fzvs::session.start();
+   networkWindow->menu.setText("Multiplayer");
+-  networkWindow->panel.setText("Host, join and diagnostics").onActivate([]{
++  networkWindow->panel.setText("F-Zero VS…").onActivate([]{
+     networkWindow->setAlignment(presentation,Alignment::Center);networkWindow->setVisible();networkWindow->setFocused();
+     fzvs::session.browse(networkWindow->joinTab.selected());
+   });
+diff --git a/hiro/core/widget/tab-frame.cpp b/hiro/core/widget/tab-frame.cpp
+index c11d834..c8d5db9 100644
+--- a/hiro/core/widget/tab-frame.cpp
++++ b/hiro/core/widget/tab-frame.cpp
+@@ -67,12 +67,13 @@ auto mTabFrame::onMove(const std::function<void (TabFrameItem, TabFrameItem)>& c
+ 
+ auto mTabFrame::remove(sTabFrameItem item) -> type& {
+   auto offset = item->offset();
+-  item->setParent();
++  // Keep the native peer and original index alive until removal completes.
+   signal(remove, item);
+-  state.items.erase(state.items.begin() + item->offset());
++  state.items.erase(state.items.begin() + offset);
+   for(auto n : range(offset, itemCount())) {
+     state.items[n]->adjustOffset(-1);
+   }
++  item->setParent();
+   return *this;
+ }
+ 

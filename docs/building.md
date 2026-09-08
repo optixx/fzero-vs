@@ -68,7 +68,12 @@ marker independently of the checkout. Avoid simultaneous builds and source edits
 
 ## Server source layout
 
-`server/src/main.c` implements a bounded, nonblocking POSIX UDP event loop.
+`server/src/server.c` implements the reusable, bounded C11 UDP server core.
+`server/include/fzvs_server.h` exposes create/poll/status/events/close/destroy.
+`server/src/main.c` is the dedicated executable wrapper for CLI flags, signals,
+readiness, stdout and JSON logs. Ares links `fzvs-server-core` directly; it does
+not launch the standalone executable. `client/fzvs_session.cpp` owns the embedded
+worker, asynchronous DNS, discovery, lifecycle and bounded event snapshots.
 `shared/fzvs_protocol.h` supplies the explicitly encoded wire format to both the
 C server and C++ client. `client/fzvs_client.cpp` owns the game state machine and
 runtime patch restoration; the Ares patch supplies memory and frontend adapters.

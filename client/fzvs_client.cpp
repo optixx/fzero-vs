@@ -30,12 +30,16 @@ void Client::log(const std::string& text) {
   fprintf(stdout,"%llu FZVS race=%u player=%d %s\n",(unsigned long long)now(),race,id+1,text.c_str()); fflush(stdout);
   events.push_back(text); if(events.size()>12) events.pop_front();
 }
-void Client::failure(const std::string& text) { log(text); change(Disconnected); publish(); }
+void Client::failure(const std::string& text) {
+  restore(); if(memory.reset) memory.reset();
+  if(socket>=0) { close(socket); socket=-1; }
+  change(Disconnected); log(text); publish();
+}
 bool Client::attach(Memory m) {
   detach(); memory=std::move(m);
   auto colon=config.address.rfind(':');
   if(colon==std::string::npos || config.key.size()>FZ_KEY_MAX) { failure("Invalid server address or room key length"); return false; }
-  addrinfo hints{},*addresses=nullptr; hints.ai_family=AF_INET; hints.ai_socktype=SOCK_DGRAM;
+  addrinfo hints{},*addresses=nullptr; hints.ai_family=AF_INET; hints.ai_socktype=SOCK_DGRAM; hints.ai_flags=AI_NUMERICHOST|AI_NUMERICSERV;
   if(getaddrinfo(config.address.substr(0,colon).c_str(),config.address.substr(colon+1).c_str(),&hints,&addresses)) {
     failure("Cannot resolve server address"); return false;
   }
@@ -44,8 +48,9 @@ bool Client::attach(Memory m) {
   freeaddrinfo(addresses);
   if(!ok) { if(socket>=0) close(socket); socket=-1; failure("Cannot open UDP connection"); return false; }
   int random=open("/dev/urandom",O_RDONLY);
-  if(random<0 || read(random,&nonce,sizeof(nonce))!=(ssize_t)sizeof(nonce)) { if(random>=0) close(random); failure("Cannot create session nonce"); close(socket); socket=-1; return false; }
+  if(random<0 || read(random,&nonce,sizeof(nonce))!=(ssize_t)sizeof(nonce)) { if(random>=0) close(random); failure("Cannot create session nonce"); return false; }
   close(random);
+  if(config.ownerNonce) nonce=config.ownerNonce;
   session=token=0; id=-1; race=commandSeq=stateSeq=snapshotSeq=0; phase=FZ_LOBBY;
   lastRecv=rateTime=now(); lastHello=lastPing=lastPublish=0; frames=0; bestRtt=1e12;
   rx=tx=bytes=stale=retries=gaps=snapshots=prevRx=prevTx=prevBytes=prevFrames=0;
@@ -56,7 +61,8 @@ void Client::detach() {
     if(id>=0 && pending.empty()) { fz_packet packet{}; packet.type=FZ_COMMAND; packet.seq=++commandSeq; packet.length=1; packet.payload[0]=FZ_LEAVE; send(packet); }
     close(socket); socket=-1;
   }
-  restore(); memory={}; id=-1; pending.clear();
+  restore(); memory={}; id=-1; pending.clear(); game=Init;
+  std::lock_guard<std::mutex> lock(mutex); requests.clear(); published={};
 }
 void Client::send(fz_packet packet) {
   packet.session=session; packet.token=token; packet.race=race;
@@ -70,12 +76,17 @@ void Client::queue(const std::vector<uint8_t>& command) {
 }
 void Client::receive(const fz_packet& p) {
   auto t=now();
+  if(id<0 && p.type==FZ_JOIN_REJECT && p.length==9 && fz_u64(p.payload)==nonce) {
+    const char *reasons[]={"Join rejected","Incorrect room password","Room is full","Race is already underway","Host is still starting","Incompatible network protocol"};
+    failure(p.payload[8]<=FZ_REJECT_VERSION ? reasons[p.payload[8]] : reasons[0]); return;
+  }
   if(p.type==FZ_WELCOME && p.length==9 && fz_u64(p.payload+1)==nonce && p.payload[0]<4 && p.session && p.token) {
     if(id>=0) return;
     id=p.payload[0]; session=p.session; token=p.token; race=p.race; commandSeq=p.ack; lastRecv=t;
     log("Joined as P"+std::to_string(id+1)+" ("+colors[id]+")"); return;
   }
   if(id<0 || p.session!=session || p.token!=token) return;
+  if(p.type==FZ_ROOM_CLOSED && p.length==1) { failure("Host closed the room"); return; }
   if(p.type==FZ_PING && p.length==8) {
     fz_packet reply{}; reply.type=FZ_PONG; reply.length=8; memcpy(reply.payload,p.payload,8); send(reply); lastRecv=t; return;
   }
@@ -116,6 +127,7 @@ void Client::tick() {
     if(n<0) break;
     fz_packet p; if(fz_decode(&p,bytesIn,(size_t)n)) { rx++; bytes+=(uint64_t)n; receive(p); }
   }
+  if(socket<0 || game==Disconnected) return;
   t=now(); // receive() advances lastRecv; avoid unsigned subtraction against the earlier timestamp
   if(id<0) {
     if(t-lastHello>250000) {
@@ -133,8 +145,6 @@ void Client::tick() {
   }
   if(t-lastRecv>(id<0 ? 10000000u : 5000000u)) {
     failure(id<0 ? "Join timed out: check server, room key, or room availability" : "Server connection lost; leave and reconnect for the next lobby");
-    restore();
-    if(memory.reset) memory.reset();
   }
   if(t-lastPublish>=200000) publish();
 }

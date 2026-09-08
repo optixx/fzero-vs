@@ -29,6 +29,7 @@ def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--players", type=int, choices=(2, 3, 4), default=2)
     parser.add_argument("--client", type=Path, default=ROOT / "build/bin/ares")
+    parser.add_argument("--server-mode", choices=("hosted", "standalone"), default="hosted")
     parser.add_argument("--server", type=Path, default=ROOT / "build/server/fzvs-server")
     parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
     parser.add_argument("--port", type=int, default=12000)
@@ -46,8 +47,8 @@ def arguments():
     parser.add_argument("--capture-frames", action="store_true", help="save one diagnostic image per race in each client profile")
     parser.add_argument("--auto-next", action="store_true", help="host automatically starts the next lobby after results")
     args = parser.parse_args()
-    if not 1 <= args.port <= 65535:
-        parser.error("--port must be between 1 and 65535")
+    if not 1 <= args.port <= 65535 or args.port == 12001:
+        parser.error("--port must be between 1 and 65535, excluding discovery port 12001")
     if args.inputs is None:
         args.inputs = ["keyboard"] + ["none"] * (args.players - 1)
     if len(args.inputs) != args.players:
@@ -71,6 +72,8 @@ def launch_plan(args, run_dir):
               "--log-level", "debug", "--ready-file", str(ready_file)]
     entries = [{"name": "server", "argv": server, "cwd": str(run_dir / "server"),
                 "log": str(run_dir / "server.log")}]
+    if args.server_mode == "hosted":
+        entries = []
     for index in range(args.players):
         name = f"client-{index + 1}"
         profile = run_dir / name
@@ -80,6 +83,11 @@ def launch_plan(args, run_dir):
                   "--fzvs-label", f"F-Zero VS — Client {index + 1}",
                   "--fzvs-input", args.inputs[index],
                   "--fzvs-window", f"{x},{y},640,480", "--fzvs-stay-active"]
+        if args.server_mode == "hosted" and index == 0:
+            client[1:3] = ["--fzvs-host", "--fzvs-players", str(args.players),
+                           "--fzvs-bind", "127.0.0.1", "--fzvs-port", str(args.port),
+                           "--fzvs-room-name", "Local test", "--fzvs-track", str(args.track),
+                           "--fzvs-league", str(args.league), "--fzvs-host-ready-file", str(ready_file)]
         if index:
             client.append("--fzvs-mute")
         if args.baseline:
@@ -93,7 +101,7 @@ def launch_plan(args, run_dir):
         client.append(str(args.rom))
         entries.append({"name": name, "argv": client, "cwd": str(profile),
                         "log": str(run_dir / f"{name}.log")})
-    return {"players": args.players, "server_ready_file": str(ready_file), "processes": entries}
+    return {"server_mode": args.server_mode, "players": args.players, "server_ready_file": str(ready_file), "processes": entries}
 
 
 def start(entry, children):
@@ -140,7 +148,7 @@ def main():
         print(f"\nWait for server readiness: {plan['server_ready_file']}")
         return 0
 
-    for label, path in (("client", args.client), ("server", args.server)):
+    for label, path in [("client", args.client)] + ([("server", args.server)] if args.server_mode == "standalone" else []):
         if not path.is_file() or not os.access(path, os.X_OK):
             print(f"Missing executable {label}: {path}\n"
                   "Build the F-Zero VS binaries or supply explicit paths; use --dry-run to inspect the setup.",
@@ -168,11 +176,11 @@ def main():
         ready = Path(plan["server_ready_file"])
         while True:
             if children[0][1].poll() is not None:
-                raise RuntimeError("Server exited before readiness; see server.log")
+                raise RuntimeError("Host/server exited before readiness; see client-1.log or server.log")
             if ready.is_file():
                 break
             if time.monotonic() >= deadline:
-                raise RuntimeError("Server readiness timed out; see server.log and the documented --ready-file contract")
+                raise RuntimeError("Host/server readiness timed out; see client-1.log or server.log")
             time.sleep(0.05)
         for entry in plan["processes"][1:]:
             start(entry, children)

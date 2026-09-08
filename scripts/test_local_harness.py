@@ -24,12 +24,13 @@ class HarnessTests(unittest.TestCase):
 import os, pathlib, sys, time
 args = sys.argv[1:]
 print("stand-in running", flush=True)
-if "--ready-file" in args:
+ready_flag = "--fzvs-host-ready-file" if "--fzvs-host-ready-file" in args else "--ready-file"
+if ready_flag in args:
     if os.environ.get("FZVS_TEST_MODE") == "server_exit":
         sys.exit(7)
     if os.environ.get("FZVS_TEST_MODE") != "no_ready":
-        pathlib.Path(args[args.index("--ready-file") + 1]).touch()
-else:
+        pathlib.Path(args[args.index(ready_flag) + 1]).touch()
+if "--fzvs-profile" in args:
     profile = pathlib.Path(args[args.index("--fzvs-profile") + 1])
     assert profile == pathlib.Path.cwd()
     (profile / "observed.json").write_text(__import__("json").dumps(args))
@@ -64,14 +65,20 @@ while True:
         self.assertEqual(run.returncode, 0, run.stderr)
         result = self.result()
         self.assertEqual(result["reason"], "duration_elapsed")
-        self.assertEqual(len(result["processes"]), 5)
+        self.assertEqual(len(result["processes"]), 4)
         session = next(self.runs.iterdir())
         plan = json.loads((session / "launch.json").read_text())
-        for index, entry in enumerate(plan["processes"][1:]):
+        for index, entry in enumerate(plan["processes"]):
             args = json.loads((Path(entry["cwd"]) / "observed.json").read_text())
             self.assertEqual("--fzvs-mute" in args, index != 0)
             self.assertIn("stand-in running", Path(entry["log"]).read_text())
         self.assert_stopped(result)
+
+    def test_standalone_remains_available(self):
+        run = self.run_setup("", "--server-mode", "standalone", "--duration", "0.2")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(len(self.result()["processes"]), 3)
+        self.assert_stopped(self.result())
 
     def test_server_exit_does_not_launch_clients(self):
         run = self.run_setup("server_exit")
@@ -88,7 +95,7 @@ while True:
     def test_client_failure_cleans_every_process(self):
         run = self.run_setup("client_exit")
         self.assertEqual(run.returncode, 1)
-        self.assertEqual(self.result()["process_exit_code"], 8)
+        self.assertEqual(self.result()["exit_code"], 1)
         self.assert_stopped(self.result())
 
     def test_signal_stops_whole_setup(self):

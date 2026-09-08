@@ -50,7 +50,7 @@ server-configure:
 server: server-configure
 	$(CMAKE) --build "$(ROOT)/build/server" --target fzvs-server --parallel $(JOBS)
 
-test: server test-protocol test-client
+test: server test-protocol test-client test-session
 	$(PYTHON) "$(ROOT)/tests/test_server.py"
 	$(PYTHON) "$(ROOT)/scripts/test_ares_source.py"
 	$(PYTHON) "$(ROOT)/scripts/test_local_harness.py"
@@ -81,3 +81,39 @@ test-client: server
 	@mkdir -p "$(ROOT)/build/tests"
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$(ROOT)/client" -I"$(ROOT)/shared" "$(ROOT)/tests/client_test.cpp" "$(ROOT)/client/fzvs_client.cpp" -o "$(ROOT)/build/tests/client-test"
 	$(PYTHON) "$(ROOT)/tests/test_client.py"
+
+.PHONY: test-session
+test-session:
+	@mkdir -p "$(ROOT)/build/tests"
+	$(CC) -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$(ROOT)/server/include" -I"$(ROOT)/shared" -c "$(ROOT)/server/src/server.c" -o "$(ROOT)/build/tests/server-core.o"
+	$(CXX) -std=c++20 -pthread -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$(ROOT)/client" -I"$(ROOT)/server/include" -I"$(ROOT)/shared" "$(ROOT)/tests/session_test.cpp" "$(ROOT)/client/fzvs_session.cpp" "$(ROOT)/build/tests/server-core.o" -o "$(ROOT)/build/tests/session-test"
+	"$(ROOT)/build/tests/session-test"
+
+.PHONY: test-client-lifecycle
+test: test-client-lifecycle
+test-client-lifecycle:
+	@mkdir -p "$(ROOT)/build/tests"
+	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$(ROOT)/client" -I"$(ROOT)/shared" "$(ROOT)/tests/client_lifecycle_test.cpp" "$(ROOT)/client/fzvs_client.cpp" -o "$(ROOT)/build/tests/client-lifecycle-test"
+	"$(ROOT)/build/tests/client-lifecycle-test"
+
+# Native Cocoa regression; requires the Ares build and a desktop session.
+.PHONY: test-ui-tabs
+test-ui-tabs: ares
+	@mkdir -p "$(ROOT)/build/tests"
+	$(CXX) -std=c++20 -DHIRO_COCOA -isystem "$(ROOT)/vendor/ares" -isystem "$(ROOT)/vendor/ares/nall" "$(ROOT)/tests/hiro_tabs_test.cpp" "$(ROOT)/build/ares/hiro/libhiro.a" "$(ROOT)/build/ares/nall/nall/CMakeFiles/nall.dir/nall.cpp.o" -framework Cocoa -framework Carbon -framework IOKit -framework Security -o "$(ROOT)/build/tests/hiro-tabs-test"
+	"$(ROOT)/build/tests/hiro-tabs-test"
+
+.PHONY: test-ux
+test: test-ux
+test-ux: server
+	@mkdir -p "$(ROOT)/build/tests"
+	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -I"$(ROOT)/client" -I"$(ROOT)/shared" "$(ROOT)/tests/presentation_test.cpp" -o "$(ROOT)/build/tests/presentation-test"
+	"$(ROOT)/build/tests/presentation-test"
+	$(CXX) -std=c++20 -pthread -Wall -Wextra -Werror -fsanitize=address,undefined -I"$(ROOT)/client" -I"$(ROOT)/shared" -I"$(ROOT)/server/include" "$(ROOT)/tests/discovery_test.cpp" "$(ROOT)/build/server/libfzvs-server-core.a" -o "$(ROOT)/build/tests/discovery-test"
+	"$(ROOT)/build/tests/discovery-test"
+
+.PHONY: test-ui-text
+test-ui-text: ares
+	@mkdir -p "$(ROOT)/build/tests"
+	$(CXX) -std=c++20 -DHIRO_COCOA -isystem "$(ROOT)/vendor/ares" -isystem "$(ROOT)/vendor/ares/nall" "$(ROOT)/tests/hiro_text_test.mm" "$(ROOT)/build/ares/hiro/libhiro.a" "$(ROOT)/build/ares/nall/nall/CMakeFiles/nall.dir/nall.cpp.o" -framework Cocoa -framework Carbon -framework IOKit -framework Security -o "$(ROOT)/build/tests/hiro-text-test"
+	"$(ROOT)/build/tests/hiro-text-test"

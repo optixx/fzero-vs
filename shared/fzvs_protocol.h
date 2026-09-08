@@ -10,7 +10,8 @@
 #define FZ_PLAYERS 4
 #define FZ_SNAPSHOT_SIZE 88
 #define FZ_KEY_MAX 64
-enum { FZ_HELLO=1, FZ_WELCOME, FZ_COMMAND, FZ_STATE, FZ_SNAPSHOT, FZ_PING, FZ_PONG, FZ_ERROR };
+enum { FZ_HELLO=1, FZ_WELCOME, FZ_COMMAND, FZ_STATE, FZ_SNAPSHOT, FZ_PING, FZ_PONG, FZ_ERROR, FZ_JOIN_REJECT, FZ_ROOM_CLOSED };
+enum { FZ_REJECT_PASSWORD=1, FZ_REJECT_FULL, FZ_REJECT_RACING, FZ_REJECT_STARTING, FZ_REJECT_VERSION };
 enum { FZ_SELECT=1, FZ_LOADED, FZ_ARM, FZ_FINISH, FZ_NEXT, FZ_CONFIG, FZ_LEAVE };
 enum { FZ_LOBBY, FZ_LOADING, FZ_COUNTDOWN, FZ_RACING, FZ_RESULTS };
 enum { FZ_EMPTY, FZ_JOINED, FZ_SELECTED, FZ_PLAYER_LOADED, FZ_PLAYER_RACING, FZ_FINISHED, FZ_DISCONNECTED };
@@ -30,7 +31,7 @@ static inline void fz_put64(uint8_t *p,uint64_t v) { fz_put32(p,(uint32_t)v); fz
 static inline int fz_newer(uint32_t a,uint32_t b) { return a!=b && (uint32_t)(a-b)<UINT32_C(0x80000000); }
 static inline size_t fz_encode(uint8_t *out,size_t capacity,const fz_packet *p) {
   size_t size=FZ_HEADER+p->length;
-  if(p->length>sizeof(p->payload) || capacity<size || p->type<FZ_HELLO || p->type>FZ_ERROR) return 0;
+  if(p->length>sizeof(p->payload) || capacity<size || p->type<FZ_HELLO || p->type>FZ_ROOM_CLOSED) return 0;
   memcpy(out,"FZVS",4); out[4]=FZ_VERSION; out[5]=p->type; fz_put16(out+6,p->length);
   fz_put64(out+8,p->session); fz_put32(out+16,p->race); fz_put32(out+20,p->seq);
   fz_put32(out+24,p->ack); fz_put64(out+28,p->token); memcpy(out+FZ_HEADER,p->payload,p->length);
@@ -38,7 +39,7 @@ static inline size_t fz_encode(uint8_t *out,size_t capacity,const fz_packet *p) 
 }
 static inline int fz_decode(fz_packet *p,const uint8_t *in,size_t size) {
   if(size<FZ_HEADER || size>FZ_MAX_PACKET || memcmp(in,"FZVS",4) || in[4]!=FZ_VERSION
-     || in[5]<FZ_HELLO || in[5]>FZ_ERROR || fz_u16(in+6)!=size-FZ_HEADER) return 0;
+     || in[5]<FZ_HELLO || in[5]>FZ_ROOM_CLOSED || fz_u16(in+6)!=size-FZ_HEADER) return 0;
   memset(p,0,sizeof(*p)); p->type=in[5]; p->length=fz_u16(in+6);
   p->session=fz_u64(in+8); p->race=fz_u32(in+16); p->seq=fz_u32(in+20);
   p->ack=fz_u32(in+24); p->token=fz_u64(in+28); memcpy(p->payload,in+FZ_HEADER,p->length);
