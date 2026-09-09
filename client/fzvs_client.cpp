@@ -20,6 +20,7 @@ static const uint8_t slots[4][4]={{0,3,2,1},{1,3,2,0},{2,3,1,0},{3,2,1,0}};
 static const uint8_t selector[4]={3,0,1,2};
 static const uint8_t palettes[4][4]={{14,12,10,8},{8,12,10,14},{10,12,8,14},{12,10,8,14}};
 static const char *colors[4]={"Pink","Blue","Green","Yellow"};
+static constexpr size_t FZ_SNAPSHOT_BUFFER_CAPACITY=16;
 View Client::view() { std::lock_guard<std::mutex> lock(mutex); return published; }
 void Client::request(uint8_t command,std::vector<uint8_t> data) {
   std::lock_guard<std::mutex> lock(mutex);
@@ -31,7 +32,7 @@ void Client::log(const std::string& text) {
   events.push_back(text); if(events.size()>12) events.pop_front();
 }
 void Client::failure(const std::string& text) {
-  restore(); if(memory.reset) memory.reset();
+  restore(); clearSnapshotBuffer(); if(memory.reset) memory.reset();
   if(socket>=0) { close(socket); socket=-1; }
   change(Disconnected); log(text); publish();
 }
@@ -61,7 +62,7 @@ void Client::detach() {
     if(id>=0 && pending.empty()) { fz_packet packet{}; packet.type=FZ_COMMAND; packet.seq=++commandSeq; packet.length=1; packet.payload[0]=FZ_LEAVE; send(packet); }
     close(socket); socket=-1;
   }
-  restore(); memory={}; id=-1; pending.clear(); game=Init;
+  restore(); memory={}; id=-1; pending.clear(); clearSnapshotBuffer(); game=Init;
   std::lock_guard<std::mutex> lock(mutex); requests.clear(); published={};
 }
 void Client::send(fz_packet packet) {
@@ -115,6 +116,7 @@ void Client::receive(const fz_packet& p) {
   for(int i=0;i<4;i++) {
     const auto *q=p.payload+24+i*16; peers[i]={q[0],q[1],q[6],fz_u16(q+2),fz_u16(q+4),fz_u32(q+8),fz_u32(q+12)};
   }
+  bufferSnapshot(fz_u64(p.payload+8));
   if(phase==FZ_COUNTDOWN && startTime!=armedTime) {
     std::vector<uint8_t> arm(9); arm[0]=FZ_ARM; fz_put64(arm.data()+1,startTime); queue(arm); armedTime=startTime;
   }
@@ -158,7 +160,7 @@ void Client::patch(uint32_t address,std::initializer_list<uint8_t> values) {
 void Client::restore() { if(memory.writeRom) for(auto [address,value]:originals) memory.writeRom(address,value); originals.clear(); }
 void Client::resetGame() {
   restore(); if(memory.reset) memory.reset();
-  game=Init; selectedSent=loadedSent=finishedSent=false; armedTime=startTime=0; car=0;
+  clearSnapshotBuffer(); game=Init; selectedSent=loadedSent=finishedSent=false; armedTime=startTime=0; car=0;
 }
 uint16_t Client::word(uint32_t a) { return (uint16_t)(memory.ram(a)|(uint16_t)memory.ram(a+1)<<8); }
 void Client::putWord(uint32_t a,uint16_t v) { memory.writeRam(a,(uint8_t)v); memory.writeRam(a+1,(uint8_t)(v>>8)); }
@@ -176,12 +178,46 @@ void Client::prepareRace() {
   patch(0xd3f,{0}); patch(0x48ff,{0x80}); patch(0x4d84,{0x80});
   patch(0x1851f,{0xa5,0x55,0xf0,0x74});
 }
+uint64_t Client::interpolationDelay() const {
+  return (uint64_t)(std::clamp(50.0+2.0*jitter,50.0,100.0)*1000.0);
+}
+std::array<Peer,4> Client::renderedPeers(uint64_t serverTime) const {
+  if(snapshotBuffer.empty()) return peers;
+  const uint64_t delay=interpolationDelay();
+  const uint64_t renderTime=serverTime>delay ? serverTime-delay : 0;
+  if(renderTime<=snapshotBuffer.front().time) return snapshotBuffer.front().peers;
+  if(renderTime>=snapshotBuffer.back().time) return snapshotBuffer.back().peers;
+  for(size_t i=1;i<snapshotBuffer.size();i++) {
+    const auto& before=snapshotBuffer[i-1]; const auto& after=snapshotBuffer[i];
+    if(renderTime>after.time) continue;
+    const double fraction=(double)(renderTime-before.time)/(double)(after.time-before.time);
+    auto result=before.peers;
+    for(int peer=0;peer<4;peer++) {
+      auto blend=[fraction](uint16_t a,uint16_t b) { return (uint16_t)std::lround((double)a+((double)b-(double)a)*fraction); };
+      result[peer].x=blend(before.peers[peer].x,after.peers[peer].x);
+      result[peer].y=blend(before.peers[peer].y,after.peers[peer].y);
+      int turn=(int)after.peers[peer].orientation-(int)before.peers[peer].orientation;
+      if(turn>127) turn-=256; else if(turn<-128) turn+=256;
+      result[peer].orientation=(uint8_t)((int)std::lround((double)before.peers[peer].orientation+turn*fraction)&255);
+    }
+    return result;
+  }
+  return snapshotBuffer.back().peers;
+}
+void Client::bufferSnapshot(uint64_t serverTime) {
+  snapshotBuffer.push_back({serverTime,peers});
+  while(snapshotBuffer.size()>FZ_SNAPSHOT_BUFFER_CAPACITY) snapshotBuffer.pop_front();
+}
+void Client::clearSnapshotBuffer() { snapshotBuffer.clear(); }
 void Client::opponents() {
+  const double estimatedServerTime=(double)now()+offset;
+  const auto rendered=renderedPeers(estimatedServerTime>0 ? (uint64_t)estimatedServerTime : 0);
   for(int slot=1;slot<4;slot++) {
     auto& peer=peers[slots[id][slot]];
+    const auto& position=rendered[slots[id][slot]];
     bool visible=peer.status==FZ_PLAYER_LOADED || peer.status==FZ_PLAYER_RACING;
-    putWord(0xb70+slot*2,visible ? peer.x : 0); putWord(0xb90+slot*2,visible ? peer.y : 0);
-    memory.writeRam(0xbd1+slot*2,peer.orientation);
+    putWord(0xb70+slot*2,visible ? position.x : 0); putWord(0xb90+slot*2,visible ? position.y : 0);
+    memory.writeRam(0xbd1+slot*2,visible ? position.orientation : 0);
   }
   putWord(0xb78,0); putWord(0xb98,0);
 }

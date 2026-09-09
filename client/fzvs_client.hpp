@@ -51,6 +51,7 @@ public:
 private:
   enum Game { Init,CarSelect,Waiting,Prepare,Location,Race,Finished,Results,Disconnected };
   struct Pending { fz_packet packet{}; uint64_t sent=0; };
+  struct Snapshot { uint64_t time=0; std::array<Peer,4> peers{}; };
   Memory memory;
   int socket=-1,id=-1;
   uint64_t session=0,token=0,nonce=0,lastRecv=0,lastHello=0,lastPing=0,startTime=0,armedTime=0,lastPublish=0,lastLog=0,resultsTime=0;
@@ -60,6 +61,7 @@ private:
   uint64_t prevRx=0,prevTx=0,prevBytes=0,prevFrames=0,rateTime=0;
   double rtt=0,jitter=0,offset=0,bestRtt=1e12;
   std::array<Peer,4> peers;
+  std::deque<Snapshot> snapshotBuffer;
   Game game=Init;
   bool loadedSent=false,selectedSent=false,finishedSent=false;
   std::map<uint32_t,uint8_t> originals;
@@ -80,6 +82,10 @@ private:
   void restore();
   void prepareRace();
   void opponents();
+  uint64_t interpolationDelay() const;
+  std::array<Peer,4> renderedPeers(uint64_t serverTime) const;
+  void bufferSnapshot(uint64_t serverTime);
+  void clearSnapshotBuffer();
   uint16_t word(uint32_t address);
   void putWord(uint32_t address,uint16_t value);
   std::vector<uint8_t> position(uint8_t command);

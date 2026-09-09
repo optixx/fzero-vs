@@ -4,7 +4,7 @@ This is a position-replication port of the original patched Snes9x/C# system,
 not input-lockstep SNES netplay. Each emulator owns its driver's physics, energy,
 laps and finish detection. The server assigns identities and coordinates the
 lobby/load/start/results barriers, then relays the latest positions at 60 Hz.
-Local collisions affect the local car; remote cars are overwritten from snapshots.
+Local collisions affect the local car. Remote cars are rendered from a small client-side snapshot buffer: the client displays them 50--100 ms behind estimated server time, linearly interpolating position and taking the shortest circular path for orientation. The delay adapts as `50 ms + 2 * jitter`, clamped to that range. When a later snapshot is unavailable, the latest state is held; this protocol version deliberately does not extrapolate velocity.
 
 ## Transport
 

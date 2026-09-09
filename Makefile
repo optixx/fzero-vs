@@ -50,7 +50,7 @@ server-configure:
 server: server-configure
 	$(CMAKE) --build "$(ROOT)/build/server" --target fzvs-server --parallel $(JOBS)
 
-test: server test-protocol test-client test-session
+test: server test-protocol test-client test-session test-interpolation
 	$(PYTHON) "$(ROOT)/tests/test_server.py"
 	$(PYTHON) "$(ROOT)/scripts/test_ares_source.py"
 	$(PYTHON) "$(ROOT)/scripts/test_local_harness.py"
@@ -95,6 +95,12 @@ test-client-lifecycle:
 	@mkdir -p "$(ROOT)/build/tests"
 	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$(ROOT)/client" -I"$(ROOT)/shared" "$(ROOT)/tests/client_lifecycle_test.cpp" "$(ROOT)/client/fzvs_client.cpp" -o "$(ROOT)/build/tests/client-lifecycle-test"
 	"$(ROOT)/build/tests/client-lifecycle-test"
+
+.PHONY: test-interpolation
+test-interpolation:
+	@mkdir -p "$(ROOT)/build/tests"
+	$(CXX) -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$(ROOT)/client" -I"$(ROOT)/shared" "$(ROOT)/tests/interpolation_test.cpp" "$(ROOT)/client/fzvs_client.cpp" -o "$(ROOT)/build/tests/interpolation-test"
+	"$(ROOT)/build/tests/interpolation-test"
 
 # Native Cocoa regression; requires the Ares build and a desktop session.
 .PHONY: test-ui-tabs

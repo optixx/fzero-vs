@@ -32,6 +32,7 @@ Source: `server/` (C server), `client/` (C++ game/network state machine), `share
 (wire codec), `patches/ares/` (emulator integration). `original/` is the legacy
 reference. `vendor/` and `build/` are generated.
 
-This preserves the original client-owned physics model. It has no rollback,
-interpolation or authoritative collision/lap validation. Local rendering and
-network tests do not replace longer manual races or testing across the internet.
+This preserves the original client-owned physics model. Remote cars use adaptive
+snapshot interpolation, but there is no rollback, velocity extrapolation, or
+authoritative collision/lap validation. Local rendering and network tests do not
+replace longer manual races or testing across the internet.
