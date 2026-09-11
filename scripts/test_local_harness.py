@@ -12,6 +12,7 @@ import unittest
 
 
 HARNESS = Path(__file__).with_name("local_test.py")
+TEST_2P = Path(__file__).with_name("test-2p.sh")
 
 
 class HarnessTests(unittest.TestCase):
@@ -79,6 +80,25 @@ while True:
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(len(self.result()["processes"]), 3)
         self.assert_stopped(self.result())
+
+    def test_two_player_preset_attaches_debug_bridge_to_primary_only(self):
+        run = subprocess.run(
+            [
+                "sh", str(TEST_2P), "--dry-run", "--client", str(self.fake),
+                "--server", str(self.fake), "--rom", str(self.rom),
+                "--run-root", str(self.runs),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout.count("--ares-debug-socket"), 1)
+        self.assertIn(
+            "--ares-debug-socket /tmp/fzero-vs-ares-debug.sock", run.stdout
+        )
+        self.assertIn("client-2", run.stdout)
+        self.assertFalse(self.runs.exists())
 
     def test_server_exit_does_not_launch_clients(self):
         run = self.run_setup("server_exit")

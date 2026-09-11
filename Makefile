@@ -8,7 +8,7 @@ ARES_CMAKE_ARGS ?=
 SERVER_CMAKE_ARGS ?=
 RUN_ARGS ?=
 
-.PHONY: help all fetch patch ares-fetch ares-patch ares-configure ares server-configure server test test-2p test-4p dry-run-2p dry-run-4p clean
+.PHONY: help all fetch patch ares-fetch ares-patch ares-configure ares server-configure server test test-mcp test-2p test-4p dry-run-2p dry-run-4p clean
 
 help:
 	@echo 'F-Zero VS development targets:'
@@ -17,6 +17,7 @@ help:
 	@echo '  make server           Configure and build the C11 server'
 	@echo '  make all              Build both components'
 	@echo '  make test             Run helpers, protocol, server and client memory/fault tests'
+	@echo '  make test-mcp         Run the MCP sidecar against its fake ares bridge'
 	@echo '  make dry-run-2p       Preview local startup (also dry-run-4p)'
 	@echo '  make test-2p          Build both and launch 2 clients (also test-4p)'
 	@echo '  make clean            Clean compiled outputs; keep downloads, patches and logs'
@@ -50,10 +51,13 @@ server-configure:
 server: server-configure
 	$(CMAKE) --build "$(ROOT)/build/server" --target fzvs-server --parallel $(JOBS)
 
-test: server test-protocol test-client test-session test-interpolation
+test: server test-protocol test-client test-session test-interpolation test-mcp
 	$(PYTHON) "$(ROOT)/tests/test_server.py"
 	$(PYTHON) "$(ROOT)/scripts/test_ares_source.py"
 	$(PYTHON) "$(ROOT)/scripts/test_local_harness.py"
+
+test-mcp:
+	PYTHONPATH="$(ROOT)/mcp/src" $(PYTHON) -m unittest discover -s "$(ROOT)/mcp/tests" -v
 
 test-2p: all
 	@sh "$(ROOT)/scripts/test-2p.sh" $(RUN_ARGS)

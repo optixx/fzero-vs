@@ -24,6 +24,14 @@ To play manually:
   --input keyboard --input gamepad:0 --input gamepad:1 --input gamepad:2
 ```
 
+The two-player preset also enables the local ares debug bridge on client 1 at
+`/tmp/fzero-vs-ares-debug.sock`. This is the instance exposed through the
+project's Codex MCP configuration. Client 2 does not open a debug socket, so
+there is no listener collision. Override the primary socket by passing
+`--ares-debug-socket /another/path.sock` after the preset arguments. The generic
+`test-local.sh` harness and the four-player preset leave the bridge disabled
+unless that option is supplied explicitly.
+
 Use the executable inside an Ares `.app` bundle, not the bundle directory. Paths
 are resolved from the invoking directory; the wrappers work from any directory.
 Default binaries are `build/bin/ares` and `build/server/fzvs-server`. The default

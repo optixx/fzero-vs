@@ -22,6 +22,7 @@
 # Python environments and caches.
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 
 # macOS metadata and editor scratch files.

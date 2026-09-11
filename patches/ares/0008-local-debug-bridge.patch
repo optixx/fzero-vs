@@ -1,0 +1,1352 @@
+diff --git a/ares/ares/platform.hpp b/ares/ares/platform.hpp
+index cba7215..66ddb6d 100644
+--- a/ares/ares/platform.hpp
++++ b/ares/ares/platform.hpp
+@@ -4,6 +4,7 @@ namespace ares {
+ 
+ enum class Event : u32 {
+   FZVSFrame,  // SNES instruction boundary at the beginning of vertical blank
++  Debugger,   // core yielded at a remote-debug safe boundary
+   None,
+   Step,
+   Frame,
+@@ -19,6 +20,7 @@ struct Platform {
+   virtual auto detach(Node::Object) -> void {}
+   virtual auto pak(Node::Object) -> std::shared_ptr<vfs::directory> { return {}; }
+   virtual auto event(Event) -> void {}
++  virtual auto debuggerPending() -> bool { return false; }
+   virtual auto log(Node::Debugger::Tracer::Tracer, string_view message) -> void {}
+   virtual auto status(string_view message) -> void {}
+   virtual auto video(Node::Video::Screen, const u32* data, u32 pitch, u32 width, u32 height) -> void {}
+diff --git a/ares/component/processor/wdc65816/disassembler.cpp b/ares/component/processor/wdc65816/disassembler.cpp
+index 9873d63..2afb207 100644
+--- a/ares/component/processor/wdc65816/disassembler.cpp
++++ b/ares/component/processor/wdc65816/disassembler.cpp
+@@ -1,6 +1,13 @@
+ auto WDC65816::disassembleInstruction(n24 address, bool e, bool m, bool x) -> string {
++  u32 length = 0;
++  return disassembleInstruction(address, e, m, x, length);
++}
++
++auto WDC65816::disassembleInstruction(n24 address, bool e, bool m, bool x, u32& length) -> string {
+   string s;
+ 
++  length = 1;
++
+   n24 pc = address;
+   string name;
+   string operand;
+@@ -35,85 +42,102 @@ auto WDC65816::disassembleInstruction(n24 address, bool e, bool m, bool x) -> st
+   n24 operandLong = operand0 << 0 | operand1 << 8 | operand2 << 16;
+ 
+   auto absolute = [&]() -> string {
++    length = 3;
+     effective = r.b << 16 | operandWord;
+     return {"$", hex(operandWord, 4L)};
+   };
+ 
+   auto absolutePC = [&]() -> string {
++    length = 3;
+     effective = pc.mask(16,23) | operandWord;
+     return {"$", hex(operandWord, 4L)};
+   };
+ 
+   auto absoluteX = [&]() -> string {
++    length = 3;
+     effective = (r.b << 16) + operandWord + r.x.w;
+     return {"$", hex(operandWord, 4L), ",x"};
+   };
+ 
+   auto absoluteY = [&]() -> string {
++    length = 3;
+     effective = (r.b << 16) + operandWord + r.y.w;
+     return {"$", hex(operandWord, 4L), ",y"};
+   };
+ 
+   auto absoluteLong = [&]() -> string {
++    length = 4;
+     effective = operandLong;
+     return {"$", hex(operandLong, 6L)};
+   };
+ 
+   auto absoluteLongX = [&]() -> string {
++    length = 4;
+     effective = operandLong + r.x.w;
+     return {"$", hex(operandLong, 6L), ",x"};
+   };
+ 
+   auto direct = [&]() -> string {
++    length = 2;
+     effective = n16(r.d.w + operandByte);
+     return {"$", hex(operandByte, 2L)};
+   };
+ 
+   auto directX = [&]() -> string {
++    length = 2;
+     effective = n16(r.d.w + operandByte + r.x.w);
+     return {"$", hex(operandByte, 2L), ",x"};
+   };
+ 
+   auto directY = [&]() -> string {
++    length = 2;
+     effective = n16(r.d.w + operandByte + r.y.w);
+     return {"$", hex(operandByte, 2L), ",y"};
+   };
+ 
+   auto immediate = [&]() -> string {
++    length = 2;
+     return {"#$", hex(operandByte, 2L)};
+   };
+ 
+   auto immediateA = [&]() -> string {
++    length = m ? 2 : 3;
+     return {"#$", m ? hex(operandByte, 2L) : hex(operandWord, 4L)};
+   };
+ 
+   auto immediateX = [&]() -> string {
++    length = x ? 2 : 3;
+     return {"#$", x ? hex(operandByte, 2L) : hex(operandWord, 4L)};
+   };
+ 
+   auto implied = [&]() -> string {
++    length = 1;
+     return {};
+   };
+ 
+   auto indexedIndirectX = [&]() -> string {
++    length = 2;
+     effective = n16(r.d.w + operandByte + r.x.w);
+     effective = r.b << 16 | readWord(*effective);
+     return {"($", hex(operandByte, 2L), ",x)"};
+   };
+ 
+   auto indirect = [&]() -> string {
++    length = 2;
+     effective = n16(r.d.w + operandByte);
+     effective = (r.b << 16) + readWord(*effective);
+     return {"($", hex(operandByte, 2L), ")"};
+   };
+ 
+   auto indirectPC = [&]() -> string {
++    length = 3;
+     effective = operandWord;
+     effective = pc.mask(16,23) | readWord(*effective);
+     return {"($", hex(operandWord, 4L), ")"};
+   };
+ 
+   auto indirectX = [&]() -> string {
++    length = 3;
+     effective = operandWord;
+     effective = pc.mask(16,23) | n16(*effective + r.x.w);
+     effective = pc.mask(16,23) | readWord(*effective);
+@@ -121,48 +145,57 @@ auto WDC65816::disassembleInstruction(n24 address, bool e, bool m, bool x) -> st
+   };
+ 
+   auto indirectIndexedY = [&]() -> string {
++    length = 2;
+     effective = n16(r.d.w + operandByte);
+     effective = (r.b << 16) + readWord(*effective) + r.y.w;
+     return {"($", hex(operandByte, 2L), "),y"};
+   };
+ 
+   auto indirectLong = [&]() -> string {
++    length = 2;
+     effective = n16(r.d.w + operandByte);
+     effective = readLong(*effective);
+     return {"[$", hex(operandByte, 2L), "]"};
+   };
+ 
+   auto indirectLongPC = [&]() -> string {
++    length = 3;
+     effective = readLong(operandWord);
+     return {"[$", hex(operandWord, 4L), "]"};
+   };
+ 
+   auto indirectLongY = [&]() -> string {
++    length = 2;
+     effective = n16(r.d.w + operandByte);
+     effective = readLong(*effective) + r.y.w;
+     return {"[$", hex(operandByte, 2L), "],y"};
+   };
+ 
+   auto move = [&]() -> string {
++    length = 3;
+     return {"$", hex(operand0, 2L), "=$", hex(operand1, 2L)};
+   };
+ 
+   auto relative = [&]() -> string {
++    length = 2;
+     effective = pc.mask(16,23) | n16(pc + 2 + (i8)operandByte);
+     return {"$", hex(*effective, 4L)};
+   };
+ 
+   auto relativeWord = [&]() -> string {
++    length = 3;
+     effective = pc.mask(16,23) | n16(pc + 3 + (i16)operandWord);
+     return {"$", hex(*effective, 4L)};
+   };
+ 
+   auto stack = [&]() -> string {
++    length = 2;
+     effective = n16(r.s.w + operandByte);
+     return {"$", hex(operandByte, 2L), ",s"};
+   };
+ 
+   auto stackIndirect = [&]() -> string {
++    length = 2;
+     effective = n16(operandByte + r.s.w);
+     effective = (r.b << 16) + readWord(*effective) + r.y.w;
+     return {"($", hex(operandByte, 2L), ",s),y"};
+diff --git a/ares/component/processor/wdc65816/wdc65816.hpp b/ares/component/processor/wdc65816/wdc65816.hpp
+index 51afb39..bac8ead 100644
+--- a/ares/component/processor/wdc65816/wdc65816.hpp
++++ b/ares/component/processor/wdc65816/wdc65816.hpp
+@@ -236,6 +236,7 @@ struct WDC65816 {
+ 
+   //disassembler.cpp
+   NALL_NOINLINE auto disassembleInstruction(n24 address, bool e, bool m, bool x) -> string;
++  NALL_NOINLINE auto disassembleInstruction(n24 address, bool e, bool m, bool x, u32& length) -> string;
+   NALL_NOINLINE auto disassembleInstruction() -> string;
+   NALL_NOINLINE auto disassembleContext(maybe<bool> e = {}) -> string;
+ 
+diff --git a/ares/sfc/cpu/cpu.cpp b/ares/sfc/cpu/cpu.cpp
+index 771e5b5..ebeb4e5 100644
+--- a/ares/sfc/cpu/cpu.cpp
++++ b/ares/sfc/cpu/cpu.cpp
+@@ -27,6 +27,10 @@ auto CPU::unload() -> void {
+ }
+ 
+ auto CPU::main() -> void {
++  // Disabled builds pay one predictable branch. When the local bridge is
++  // enabled, only a pending request yields at this instruction boundary.
++  if(remoteDebugging && platform->debuggerPending()) scheduler.exit(Event::Debugger);
++
+   // Runtime opcode patches must never change an operand halfway through a CPU
+   // instruction. The PPU's frame exit can suspend us inside instruction().
+   bool vblank = vcounter() >= 225;
+diff --git a/ares/sfc/cpu/cpu.hpp b/ares/sfc/cpu/cpu.hpp
+index e3c56d9..8608452 100644
+--- a/ares/sfc/cpu/cpu.hpp
++++ b/ares/sfc/cpu/cpu.hpp
+@@ -1,6 +1,7 @@
+ struct CPU : WDC65816, Thread, PPUcounter {
+   Node::Object node;
+   bool fzvsVblank = false;
++  bool remoteDebugging = false;
+   Node::Setting::Natural version;
+ 
+   struct Debugger {
+diff --git a/desktop-ui/CMakeLists.txt b/desktop-ui/CMakeLists.txt
+index 75a46b9..37243a2 100644
+--- a/desktop-ui/CMakeLists.txt
++++ b/desktop-ui/CMakeLists.txt
+@@ -1,6 +1,7 @@
+ add_executable(
+   desktop-ui
+   desktop-ui.cpp
++  debug_bridge.cpp
+   resource/resource.cpp
+   input/input.cpp
+   emulator/emulator.cpp
+@@ -27,6 +28,7 @@ set_source_files_properties(desktop-ui ${desktop-ui_SOURCES} PROPERTIES HEADER_F
+ set_source_files_properties(
+   desktop-ui
+   desktop-ui.cpp
++  debug_bridge.cpp
+   resource/resource.cpp
+   input/input.cpp
+   emulator/emulator.cpp
+diff --git a/desktop-ui/desktop-ui.cpp b/desktop-ui/desktop-ui.cpp
+index 2b0bbe7..1fe2687 100644
+--- a/desktop-ui/desktop-ui.cpp
++++ b/desktop-ui/desktop-ui.cpp
+@@ -102,6 +102,10 @@ auto nall::main(Arguments arguments) -> void {
+     program.noFilePrompt = true;
+   }
+ 
++  if(string socketPath; arguments.take("--ares-debug-socket", socketPath)) {
++    program.debugSocketPath = socketPath;
++  }
++
+   {
+     auto& c = fzvs::client.config;
+     string value;
+@@ -220,6 +224,7 @@ auto nall::main(Arguments arguments) -> void {
+     print("  --fzvs-capture --fzvs-auto-next --fzvs-baseline (diagnostic: no game patches)\n");
+     print("  --fzvs-mute --fzvs-stay-active --fzvs-auto-car 0..3 (scripted test driver)\n");
+     print("Options:\n");
++    print("  --ares-debug-socket path  Enable the local NDJSON debug bridge\n");
+     print("  --help                Displays available options and exit\n");
+     print("  --version             Displays the version string of the application\n");
+ #if defined(PLATFORM_WINDOWS)
+diff --git a/desktop-ui/desktop-ui.hpp b/desktop-ui/desktop-ui.hpp
+index 0e05fab..744bdab 100644
+--- a/desktop-ui/desktop-ui.hpp
++++ b/desktop-ui/desktop-ui.hpp
+@@ -22,6 +22,7 @@ namespace ruby {
+ 
+ #include "fzvs_client.hpp"
+ #include "fzvs_session.hpp"
++#include "debug_bridge.hpp"
+ #include "resource/resource.hpp"
+ #include "input/input.hpp"
+ #include "emulator/emulator.hpp"
+diff --git a/desktop-ui/program/load.cpp b/desktop-ui/program/load.cpp
+index 34397d8..08a75fd 100644
+--- a/desktop-ui/program/load.cpp
++++ b/desktop-ui/program/load.cpp
+@@ -87,6 +87,7 @@ auto Program::load(string location) -> bool {
+     return false;
+   }
+   location = emulator->game->location;
++  debugBridge.gameLoaded();
+ 
+   //this is a safeguard warning in case the user loads their games from a read-only location:
+   string savesPath = settings.paths.saves;
+@@ -164,6 +165,8 @@ auto Program::unload() -> void {
+   fzvsOnUnload();
+   if(!emulator) return;
+ 
++  debugBridge.gameUnloaded();
++
+   nall::GDB::server.close();
+   nall::GDB::server.reset();
+ 
+diff --git a/desktop-ui/program/platform.cpp b/desktop-ui/program/platform.cpp
+index 3e6fac3..d14a142 100644
+--- a/desktop-ui/program/platform.cpp
++++ b/desktop-ui/program/platform.cpp
+@@ -27,6 +27,7 @@ auto Program::pak(ares::Node::Object node) -> std::shared_ptr<vfs::directory> {
+ }
+ 
+ auto Program::event(ares::Event event) -> void {
++  if(event == ares::Event::Debugger) { debugBoundaryReady = true; return; }
+   if(event==ares::Event::FZVSFrame) { if(fzvs::client.active()) fzvs::client.frame(); return; }
+   if(fzvs::client.active() && (event==ares::Event::FastForwardOn || event==ares::Event::FastForwardOff)) return;
+   if(event == ares::Event::FastForwardOn) {
+@@ -50,6 +51,10 @@ auto Program::event(ares::Event event) -> void {
+   }
+ }
+ 
++auto Program::debuggerPending() -> bool {
++  return debugBridge.pending();
++}
++
+ auto Program::log(ares::Node::Debugger::Tracer::Tracer node, string_view message) -> void {
+   string channel = string{node->component(), " ", node->name()};
+ 
+@@ -82,6 +87,8 @@ auto Program::status(string_view message) -> void {
+ auto Program::video(ares::Node::Video::Screen node, const u32* data, u32 pitch, u32 width, u32 height) -> void {
+   if(screens.empty()) return;
+ 
++  if(debugBridge.active()) debugBridge.captureFrame(data, pitch, width, height);
++
+   if(requestScreenshot) {
+     requestScreenshot = false;
+     captureScreenshot(data, pitch, width, height);
+diff --git a/desktop-ui/program/program.cpp b/desktop-ui/program/program.cpp
+index a1c3521..16e95f6 100644
+--- a/desktop-ui/program/program.cpp
++++ b/desktop-ui/program/program.cpp
+@@ -23,6 +23,7 @@ auto Program::create() -> void {
+   }
+ 
+   _isRunning = true;
++  if(program.debugSocketPath) debugBridge.start(program.debugSocketPath.data());
+   worker = thread::create(std::bind_front(&Program::emulatorRunLoop, this));
+   program.rewindReset();
+ 
+@@ -72,6 +73,7 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
+       waitForInterrupts();
+       continue;
+     }
++    if(debugBridge.pending() && (!emulator || (paused && debugBoundaryReady))) debugBridge.processBoundary();
+     if(fzvs::client.active()) fzvs::client.tick();
+     if(!emulator) {
+       usleep(20 * 1000);
+@@ -79,6 +81,7 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
+     }
+ 
+     if(emulator && nall::GDB::server.isHalted()) {
++      if(debugBridge.pending()) debugBridge.processBoundary();
+       ruby::audio.clear();
+       nall::GDB::server.updateLoop(); // sleeps internally
+       continue;
+@@ -86,7 +89,7 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
+ 
+     bool defocused = !fzvs::client.active() && settings.input.defocus == "Pause" && !ruby::video.fullScreen() && !presentation.focused();
+ 
+-    if(!emulator || (paused && !program.requestFrameAdvance) || defocused) {
++    if(!emulator || ((paused && !program.requestFrameAdvance) || defocused) && !debugBridge.pending()) {
+       ruby::audio.clear();
+       nall::GDB::server.updateLoop();
+       usleep(20 * 1000);
+@@ -98,7 +101,8 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
+     nall::GDB::server.updateLoop();
+ 
+     program.requestFrameAdvance = false;
+-    if(fzvs::client.active() || !runAhead || fastForwarding || rewinding) {
++    debugBoundaryReady = false;
++    if(debugBridge.active() || fzvs::client.active() || !runAhead || fastForwarding || rewinding) {
+       emulator->root->run();
+     } else {
+       ares::setRunAhead(true);
+@@ -110,6 +114,10 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
+       emulator->root->unserialize(state);
+     }
+ 
++    if(debugBoundaryReady) {
++      debugBridge.processBoundary();
++    }
++
+     nall::GDB::server.updateLoop();
+ 
+ 
+@@ -178,6 +186,7 @@ auto Program::quit() -> void {
+     lock.unlock();
+   }
+   _programConditionVariable.notify_all();
++  debugBridge.stop();
+   worker.join();
+   program._isRunning = false;
+   unload();
+diff --git a/desktop-ui/program/program.hpp b/desktop-ui/program/program.hpp
+index 5de04c8..441fbcc 100644
+--- a/desktop-ui/program/program.hpp
++++ b/desktop-ui/program/program.hpp
+@@ -8,6 +8,7 @@ struct Program : ares::Platform {
+   auto detach(ares::Node::Object) -> void override;
+   auto pak(ares::Node::Object) -> std::shared_ptr<vfs::directory> override;
+   auto event(ares::Event) -> void override;
++  auto debuggerPending() -> bool override;
+   auto log(ares::Node::Debugger::Tracer::Tracer tracer, string_view message) -> void override;
+   auto status(string_view message) -> void override;
+   auto video(ares::Node::Video::Screen, const u32* data, u32 pitch, u32 width, u32 height) -> void override;
+@@ -35,7 +36,7 @@ struct Program : ares::Platform {
+   auto error(const string&) -> void;
+ 
+   //utility.cpp
+-  auto pause(bool) -> void;
++  auto pause(bool, bool force = false) -> void;
+   auto mute() -> void;
+   auto paletteUpdate() -> void;
+   auto runAheadUpdate() -> void;
+@@ -72,6 +73,7 @@ struct Program : ares::Platform {
+   string startSystem;
+   string startShader;
+   string startSaveStateSlot;
++  string debugSocketPath;
+ 
+   std::vector<ares::Node::Video::Screen> screens;
+   std::vector<ares::Node::Audio::Stream> streams;
+@@ -83,6 +85,7 @@ struct Program : ares::Platform {
+   bool requestFrameAdvance = false;
+   bool requestScreenshot = false;
+   bool keyboardCaptured = false;
++  bool debugBoundaryReady = false;
+   atomic<bool> pendingKioskExit = false;
+ 
+   struct State {
+diff --git a/desktop-ui/program/utility.cpp b/desktop-ui/program/utility.cpp
+index fb89676..cc1fb2c 100644
+--- a/desktop-ui/program/utility.cpp
++++ b/desktop-ui/program/utility.cpp
+@@ -1,5 +1,5 @@
+-auto Program::pause(bool state) -> void {
+-  if(fzvs::client.active() && state) return;
++auto Program::pause(bool state, bool force) -> void {
++  if(fzvs::client.active() && state && !force) return;
+   Program::Guard guard;
+   if(paused == state) return;
+   paused = state;
+diff --git a/desktop-ui/debug_bridge.cpp b/desktop-ui/debug_bridge.cpp
+new file mode 100644
+index 0000000..1f3d8fc
+--- /dev/null
++++ b/desktop-ui/debug_bridge.cpp
+@@ -0,0 +1,787 @@
++#if !defined(_WIN32)
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <sys/un.h>
++#include <unistd.h>
++#endif
++
++#include <cerrno>
++#include <cstdio>
++#include <cstring>
++#include <limits>
++#include <set>
++#include <span>
++
++#include "desktop-ui.hpp"
++#include <nall/string/markup/json.hpp>
++#if defined(CORE_SFC)
++#include <sfc/sfc.hpp>
++#endif
++
++DebugBridge debugBridge;
++
++namespace {
++
++constexpr size_t MaximumRequestLine = 256 * 1024;
++constexpr uint64_t MaximumRequestId = 9'007'199'254'740'991ull;
++constexpr uint32_t MaximumTransfer = 64 * 1024;
++
++auto jsonEscape(const std::string& input) -> std::string {
++  std::string output;
++  output.reserve(input.size() + 8);
++  static const char* digits = "0123456789abcdef";
++  for(unsigned char value : input) {
++    switch(value) {
++    case '"': output += "\\\""; break;
++    case '\\': output += "\\\\"; break;
++    case '\b': output += "\\b"; break;
++    case '\f': output += "\\f"; break;
++    case '\n': output += "\\n"; break;
++    case '\r': output += "\\r"; break;
++    case '\t': output += "\\t"; break;
++    default:
++      if(value < 0x20) {
++        output += "\\u00";
++        output += digits[value >> 4];
++        output += digits[value & 15];
++      } else {
++        output += static_cast<char>(value);
++      }
++      break;
++    }
++  }
++  return output;
++}
++
++auto quoted(const std::string& input) -> std::string {
++  return "\"" + jsonEscape(input) + "\"";
++}
++
++auto jsonBool(bool value) -> const char* {
++  return value ? "true" : "false";
++}
++
++auto success(const std::string& id, const std::string& fields = {}) -> std::string {
++  return "{\"id\":" + id + ",\"ok\":true" + fields + "}";
++}
++
++auto failure(const std::string& id, const char* code, const std::string& message) -> std::string {
++  return "{\"id\":" + id + ",\"ok\":false,\"error\":{\"code\":" +
++    quoted(code) + ",\"message\":" + quoted(message) + "}}";
++}
++
++auto nodeText(const Markup::Node& node) -> std::string {
++  auto value = node.text();
++  return value.data();
++}
++
++auto unsignedField(
++  const Markup::Node& document,
++  const char* name,
++  uint64_t minimum,
++  uint64_t maximum,
++  uint64_t& output
++) -> bool {
++  auto node = document[name];
++  if(!node) return false;
++  auto text = nodeText(node);
++  if(text.empty()) return false;
++  uint64_t value = 0;
++  for(char digit : text) {
++    if(digit < '0' || digit > '9') return false;
++    auto next = static_cast<uint64_t>(digit - '0');
++    if(value > (std::numeric_limits<uint64_t>::max() - next) / 10) return false;
++    value = value * 10 + next;
++  }
++  if(value < minimum || value > maximum) return false;
++  output = value;
++  return true;
++}
++
++auto stringField(const Markup::Node& document, const char* name, std::string& output) -> bool {
++  auto node = document[name];
++  if(!node) return false;
++  output = nodeText(node);
++  return output != "null";
++}
++
++auto decodeHex(const std::string& input, std::vector<uint8_t>& output) -> bool {
++  if(input.empty() || input.size() % 2) return false;
++  auto nibble = [](char value) -> int {
++    if(value >= '0' && value <= '9') return value - '0';
++    if(value >= 'a' && value <= 'f') return value - 'a' + 10;
++    if(value >= 'A' && value <= 'F') return value - 'A' + 10;
++    return -1;
++  };
++  output.clear();
++  output.reserve(input.size() / 2);
++  for(size_t index = 0; index < input.size(); index += 2) {
++    auto high = nibble(input[index]);
++    auto low = nibble(input[index + 1]);
++    if(high < 0 || low < 0) return false;
++    output.push_back(static_cast<uint8_t>(high << 4 | low));
++  }
++  return true;
++}
++
++auto normalizeSha256(std::string& value) -> bool {
++  if(value.size() != 64) return false;
++  for(char& digit : value) {
++    if(digit >= '0' && digit <= '9') continue;
++    if(digit >= 'a' && digit <= 'f') continue;
++    if(digit >= 'A' && digit <= 'F') {
++      digit = static_cast<char>(digit - 'A' + 'a');
++      continue;
++    }
++    return false;
++  }
++  return true;
++}
++
++auto encodeHex(const uint8_t* data, size_t size, bool spaced = false) -> std::string {
++  static const char* digits = "0123456789ABCDEF";
++  std::string output;
++  output.reserve(size * (spaced ? 3 : 2));
++  for(size_t index = 0; index < size; index++) {
++    if(spaced && index) output += ' ';
++    output += digits[data[index] >> 4];
++    output += digits[data[index] & 15];
++  }
++  return output;
++}
++
++auto encodeHex(const std::vector<uint8_t>& data) -> std::string {
++  return encodeHex(data.data(), data.size());
++}
++
++auto regionValid(uint64_t address, uint64_t size, uint64_t limit) -> bool {
++  return size > 0 && size <= MaximumTransfer && address <= limit && size <= limit - address;
++}
++
++#if !defined(_WIN32)
++auto closeOwned(std::atomic<int>& owner, int socket) -> void {
++  int expected = socket;
++  if(owner.compare_exchange_strong(expected, -1)) ::close(socket);
++}
++
++auto sendAll(int socket, const std::string& message) -> bool {
++  size_t offset = 0;
++  while(offset < message.size()) {
++#if defined(MSG_NOSIGNAL)
++    constexpr int flags = MSG_NOSIGNAL;
++#else
++    constexpr int flags = 0;
++#endif
++    auto written = ::send(socket, message.data() + offset, message.size() - offset, flags);
++    if(written < 0 && errno == EINTR) continue;
++    if(written <= 0) return false;
++    offset += static_cast<size_t>(written);
++  }
++  return true;
++}
++#endif
++
++}  // namespace
++
++auto DebugBridge::start(const std::string& socketPath) -> bool {
++  if(_active.load()) return true;
++#if defined(_WIN32)
++  logEvent("start_failed", "Unix-domain sockets are unavailable on this build");
++  return false;
++#else
++  if(socketPath.empty() || socketPath.size() >= sizeof(sockaddr_un::sun_path)) {
++    logEvent("start_failed", "socket path is empty or too long");
++    return false;
++  }
++
++  struct stat existing = {};
++  if(::lstat(socketPath.c_str(), &existing) == 0) {
++    if(!S_ISSOCK(existing.st_mode)) {
++      logEvent("start_failed", "refusing to replace a non-socket path");
++      return false;
++    }
++    auto probe = ::socket(AF_UNIX, SOCK_STREAM, 0);
++    sockaddr_un address = {};
++    address.sun_family = AF_UNIX;
++    std::memcpy(address.sun_path, socketPath.c_str(), socketPath.size() + 1);
++    if(probe >= 0 && ::connect(probe, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
++      ::close(probe);
++      logEvent("start_failed", "another debug bridge is already listening");
++      return false;
++    }
++    if(probe >= 0) ::close(probe);
++    if(::unlink(socketPath.c_str()) != 0) {
++      logEvent("start_failed", std::strerror(errno));
++      return false;
++    }
++  } else if(errno != ENOENT) {
++    logEvent("start_failed", std::strerror(errno));
++    return false;
++  }
++
++  auto listener = ::socket(AF_UNIX, SOCK_STREAM, 0);
++  if(listener < 0) {
++    logEvent("start_failed", std::strerror(errno));
++    return false;
++  }
++  sockaddr_un address = {};
++  address.sun_family = AF_UNIX;
++  std::memcpy(address.sun_path, socketPath.c_str(), socketPath.size() + 1);
++  if(::bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 ||
++     ::chmod(socketPath.c_str(), 0600) != 0 || ::listen(listener, 1) != 0) {
++    auto message = std::string{std::strerror(errno)};
++    ::close(listener);
++    ::unlink(socketPath.c_str());
++    logEvent("start_failed", message);
++    return false;
++  }
++
++  _socketPath = socketPath;
++  _listenSocket = listener;
++  _active = true;
++#if defined(CORE_SFC)
++  ares::SuperFamicom::cpu.remoteDebugging = true;
++#endif
++  _serverThread = std::thread(&DebugBridge::serverLoop, this);
++  logEvent("started", socketPath);
++  return true;
++#endif
++}
++
++auto DebugBridge::stop() -> void {
++  if(!_active.exchange(false)) return;
++#if !defined(_WIN32)
++  auto client = _clientSocket.exchange(-1);
++  if(client >= 0) {
++    ::shutdown(client, SHUT_RDWR);
++    ::close(client);
++  }
++  auto listener = _listenSocket.exchange(-1);
++  if(listener >= 0) {
++    ::shutdown(listener, SHUT_RDWR);
++    ::close(listener);
++  }
++#endif
++  failPending();
++  if(_serverThread.joinable()) _serverThread.join();
++#if !defined(_WIN32)
++  if(!_socketPath.empty()) ::unlink(_socketPath.c_str());
++#endif
++  logEvent("stopped");
++}
++
++auto DebugBridge::serverLoop() -> void {
++#if !defined(_WIN32)
++  while(_active.load()) {
++    auto listener = _listenSocket.load();
++    if(listener < 0) break;
++    auto client = ::accept(listener, nullptr, nullptr);
++    if(client < 0) {
++      if(errno == EINTR) continue;
++      if(_active.load()) logEvent("protocol_error", std::strerror(errno));
++      break;
++    }
++    _clientSocket = client;
++    logEvent("client_connected");
++    clientLoop(client);
++    closeOwned(_clientSocket, client);
++    logEvent("client_disconnected");
++  }
++  auto listener = _listenSocket.load();
++  if(listener >= 0) closeOwned(_listenSocket, listener);
++#endif
++}
++
++auto DebugBridge::clientLoop(int socket) -> void {
++#if !defined(_WIN32)
++  std::string input;
++  char buffer[4096];
++  while(_active.load()) {
++    auto received = ::recv(socket, buffer, sizeof(buffer), 0);
++    if(received < 0 && errno == EINTR) continue;
++    if(received <= 0) return;
++    input.append(buffer, static_cast<size_t>(received));
++    if(input.size() > MaximumRequestLine && input.find('\n') == std::string::npos) {
++      auto response = failure("null", "REQUEST_TOO_LARGE", "request line exceeds 256 KiB") + "\n";
++      sendAll(socket, response);
++      logEvent("protocol_error", "oversized request");
++      return;
++    }
++
++    while(true) {
++      auto newline = input.find('\n');
++      if(newline == std::string::npos) break;
++      auto line = input.substr(0, newline);
++      input.erase(0, newline + 1);
++      if(!line.empty() && line.back() == '\r') line.pop_back();
++      if(line.size() > MaximumRequestLine) {
++        if(!sendAll(socket, failure("null", "REQUEST_TOO_LARGE", "request line exceeds 256 KiB") + "\n")) return;
++        continue;
++      }
++      auto request = enqueue(line);
++      std::unique_lock lock(request->mutex);
++      request->condition.wait(lock, [&] { return request->completed || !_active.load(); });
++      auto response = request->completed
++        ? request->response
++        : failure("null", "SERVER_STOPPING", "debug bridge is stopping");
++      lock.unlock();
++      if(!sendAll(socket, response + "\n")) return;
++    }
++  }
++#else
++  (void)socket;
++#endif
++}
++
++auto DebugBridge::enqueue(const std::string& line) -> std::shared_ptr<Request> {
++  auto request = std::make_shared<Request>();
++  request->line = line;
++  {
++    std::lock_guard lock(_queueMutex);
++    _queue.push_back(request);
++    _pending.fetch_add(1);
++  }
++  return request;
++}
++
++auto DebugBridge::failPending() -> void {
++  std::deque<std::shared_ptr<Request>> requests;
++  {
++    std::lock_guard lock(_queueMutex);
++    requests.swap(_queue);
++    _pending = 0;
++  }
++  for(auto& request : requests) {
++    std::lock_guard lock(request->mutex);
++    request->response = failure("null", "SERVER_STOPPING", "debug bridge is stopping");
++    request->completed = true;
++    request->condition.notify_one();
++  }
++}
++
++auto DebugBridge::processBoundary() -> void {
++  while(true) {
++    std::shared_ptr<Request> request;
++    {
++      std::lock_guard lock(_queueMutex);
++      if(_queue.empty()) return;
++      request = _queue.front();
++      _queue.pop_front();
++      _pending.fetch_sub(1);
++    }
++    auto response = dispatch(request->line);
++    {
++      std::lock_guard lock(request->mutex);
++      request->response = std::move(response);
++      request->completed = true;
++    }
++    request->condition.notify_one();
++  }
++}
++
++auto DebugBridge::gameLoaded() -> void {
++  _gameLoaded = active() && emulator && emulator->root;
++  _romName.clear();
++  _romSha256.clear();
++  _frameCounter = 0;
++  _patches.clear();
++  _states.clear();
++  _frame.clear();
++  _frameWidth = _frameHeight = 0;
++  if(!_gameLoaded) return;
++  _romName = emulator->game ? Location::file(emulator->game->location).data() : "";
++#if defined(CORE_SFC)
++  if(emulator->name == "Super Famicom" && ares::SuperFamicom::cartridge.rom) {
++    auto& rom = ares::SuperFamicom::cartridge.rom;
++    Hash::SHA256 hash;
++    hash.input(static_cast<const void*>(rom.data()), rom.size());
++    _romSha256 = hash.digest().data();
++  }
++#endif
++}
++
++auto DebugBridge::gameUnloaded() -> void {
++  _gameLoaded = false;
++  _romName.clear();
++  _romSha256.clear();
++  _frameCounter = 0;
++  _patches.clear();
++  _states.clear();
++  _frame.clear();
++  _frameWidth = _frameHeight = 0;
++}
++
++auto DebugBridge::captureFrame(
++  const uint32_t* data, uint32_t pitch, uint32_t width, uint32_t height
++) -> void {
++  if(!data || !width || !height || pitch < width * sizeof(uint32_t)) return;
++  _frame.resize(static_cast<size_t>(width) * height);
++  auto sourcePitch = pitch / sizeof(uint32_t);
++  for(uint32_t y = 0; y < height; y++) {
++    std::memcpy(_frame.data() + static_cast<size_t>(y) * width,
++      data + static_cast<size_t>(y) * sourcePitch, width * sizeof(uint32_t));
++  }
++  _frameWidth = width;
++  _frameHeight = height;
++  _frameCounter++;
++}
++
++auto DebugBridge::dispatch(const std::string& line) -> std::string {
++  auto document = JSON::unserialize(line.c_str());
++  if(!document) {
++    logEvent("protocol_error", "malformed JSON");
++    return failure("null", "MALFORMED_JSON", "request is not valid JSON");
++  }
++
++  uint64_t numericId = 0;
++  if(!unsignedField(document, "id", 0, MaximumRequestId, numericId)) {
++    logEvent("protocol_error", "missing or invalid request id");
++    return failure("null", "INVALID_REQUEST_ID", "id must be a non-negative JSON-safe integer");
++  }
++  auto id = std::to_string(numericId);
++  std::string command;
++  if(!stringField(document, "command", command) || command.empty()) {
++    return failure(id, "INVALID_COMMAND", "command must be a non-empty string");
++  }
++
++  if(command == "emulator.status") {
++    auto loaded = _gameLoaded && emulator && emulator->root;
++    auto system = loaded ? std::string{emulator->name.data()} : std::string{};
++    auto state = !loaded ? "empty" : program.paused ? "paused" : "running";
++    std::string fields;
++    fields += ",\"protocol_version\":" + std::to_string(ProtocolVersion);
++    fields += ",\"bridge_version\":" + quoted(BridgeVersion);
++    fields += ",\"game_loaded\":" + std::string{jsonBool(loaded)};
++    fields += ",\"system\":" + (loaded ? quoted(system) : "null");
++    fields += ",\"rom_name\":" + (loaded ? quoted(_romName) : "null");
++    fields += ",\"rom_sha256\":" + (!_romSha256.empty() ? quoted(_romSha256) : "null");
++    fields += ",\"running\":" + std::string{jsonBool(loaded && !program.paused)};
++    fields += ",\"paused\":" + std::string{jsonBool(loaded && program.paused)};
++    fields += ",\"state\":" + quoted(state);
++    fields += ",\"frame\":" + std::to_string(_frameCounter);
++    return success(id, fields);
++  }
++
++  if(!_gameLoaded || !emulator || !emulator->root) {
++    return failure(id, "NO_GAME", "no game is loaded");
++  }
++
++  if(command == "emulator.pause") {
++    program.pause(true, true);
++    logEvent("pause");
++    return success(id, ",\"paused\":true");
++  }
++  if(command == "emulator.resume") {
++    program.pause(false, true);
++    logEvent("resume");
++    return success(id, ",\"paused\":false");
++  }
++  if(command == "emulator.reset") {
++    emulator->root->power(true);
++    logEvent("reset");
++    return success(id, ",\"reset\":true");
++  }
++
++#if !defined(CORE_SFC)
++  return failure(id, "UNSUPPORTED_SYSTEM", "this build does not include the Super Famicom core");
++#else
++  if(emulator->name != "Super Famicom") {
++    return failure(id, "UNSUPPORTED_SYSTEM", "initial debug support requires Super Famicom");
++  }
++  auto& cpu = ares::SuperFamicom::cpu;
++  auto& rom = ares::SuperFamicom::cartridge.rom;
++  ares::Node::Debugger::Memory vram, oam, cgram;
++  for(auto node : ares::Node::enumerate<ares::Node::Debugger::Memory>(emulator->root)) {
++    if(node->name() == "PPU VRAM") vram = node;
++    if(node->name() == "PPU OAM") oam = node;
++    if(node->name() == "PPU CGRAM") cgram = node;
++  }
++
++  if(command == "cpu.registers") {
++    auto p = static_cast<uint32_t>(cpu.r.p);
++    auto pc = static_cast<uint32_t>(cpu.r.pc.w);
++    auto pb = static_cast<uint32_t>(cpu.r.pc.b);
++    auto formatted = std::string{"$"} + hex(pb, 2L).data() + ":" + hex(pc, 4L).data();
++    std::string fields;
++    fields += ",\"pc\":" + std::to_string(pc);
++    fields += ",\"pb\":" + std::to_string(pb);
++    fields += ",\"db\":" + std::to_string(static_cast<uint32_t>(cpu.r.b));
++    fields += ",\"a\":" + std::to_string(static_cast<uint32_t>(cpu.r.a.w));
++    fields += ",\"x\":" + std::to_string(static_cast<uint32_t>(cpu.r.x.w));
++    fields += ",\"y\":" + std::to_string(static_cast<uint32_t>(cpu.r.y.w));
++    fields += ",\"s\":" + std::to_string(static_cast<uint32_t>(cpu.r.s.w));
++    fields += ",\"d\":" + std::to_string(static_cast<uint32_t>(cpu.r.d.w));
++    fields += ",\"p\":" + std::to_string(p);
++    fields += ",\"e\":" + std::string{jsonBool(cpu.r.e)};
++    fields += ",\"pc_formatted\":" + quoted(formatted);
++    fields += ",\"flags\":{";
++    fields += "\"n\":" + std::string{jsonBool(cpu.r.p.n)};
++    fields += ",\"v\":" + std::string{jsonBool(cpu.r.p.v)};
++    fields += ",\"m\":" + std::string{jsonBool(cpu.r.p.m)};
++    fields += ",\"x\":" + std::string{jsonBool(cpu.r.p.x)};
++    fields += ",\"d\":" + std::string{jsonBool(cpu.r.p.d)};
++    fields += ",\"i\":" + std::string{jsonBool(cpu.r.p.i)};
++    fields += ",\"z\":" + std::string{jsonBool(cpu.r.p.z)};
++    fields += ",\"c\":" + std::string{jsonBool(cpu.r.p.c)} + "}";
++    return success(id, fields);
++  }
++
++  if(command == "cpu.disassemble") {
++    uint64_t address = 0, count = 0;
++    if(!unsignedField(document, "address", 0, 0xffffff, address) ||
++       !unsignedField(document, "count", 1, 256, count)) {
++      return failure(id, "INVALID_ARGUMENT", "address must be 24-bit and count must be 1..256");
++    }
++    auto current = static_cast<uint32_t>(address);
++    std::string instructions = "[";
++    for(uint64_t index = 0; index < count; index++) {
++      uint32_t length = 0;
++      auto decoded = cpu.disassembleInstruction(n24(current), cpu.r.e, cpu.r.p.m, cpu.r.p.x, length);
++      if(length < 1 || length > 4) length = 1;
++      uint8_t bytes[4] = {};
++      for(uint32_t offset = 0; offset < length; offset++) {
++        auto byteAddress = current & 0xff0000 | (current + offset & 0xffff);
++        if((byteAddress & 0x40ffff) >= 0x2000 && (byteAddress & 0x40ffff) <= 0x5fff) {
++          bytes[offset] = 0;
++        } else {
++          bytes[offset] = cpu.readDisassembler(n24(byteAddress));
++        }
++      }
++      decoded.strip();
++      if(index) instructions += ',';
++      instructions += "{\"address\":" + std::to_string(current);
++      instructions += ",\"bytes\":" + quoted(encodeHex(bytes, length, true));
++      instructions += ",\"instruction\":" + quoted(decoded.data()) + "}";
++      current = current & 0xff0000 | (current + length & 0xffff);
++    }
++    instructions += ']';
++    std::string fields = ",\"address\":" + std::to_string(address);
++    fields += ",\"count\":" + std::to_string(count);
++    fields += ",\"mode\":{";
++    fields += "\"e\":" + std::string{jsonBool(cpu.r.e)};
++    fields += ",\"m\":" + std::string{jsonBool(cpu.r.p.m)};
++    fields += ",\"x\":" + std::string{jsonBool(cpu.r.p.x)} + "}";
++    fields += ",\"instructions\":" + instructions;
++    return success(id, fields);
++  }
++
++  if(command == "memory.read") {
++    std::string domain;
++    uint64_t address = 0, size = 0;
++    if(!stringField(document, "domain", domain) ||
++       !unsignedField(document, "address", 0, 0xffffff, address) ||
++       !unsignedField(document, "size", 1, MaximumTransfer, size)) {
++      return failure(id, "INVALID_ARGUMENT", "domain, address, and size are required");
++    }
++    uint64_t limit = domain == "wram" ? sizeof(cpu.wram) : domain == "vram" && vram ? vram->size() : domain == "oam" && oam ? oam->size() : domain == "cgram" && cgram ? cgram->size() : domain == "rom" ? rom.size() : domain == "bus" ? 1 << 24 : 0;
++    if(!limit) return failure(id, "INVALID_DOMAIN", "domain must be wram, vram, oam, cgram, rom, or bus");
++    if(!regionValid(address, size, limit)) return failure(id, "INVALID_ADDRESS", "requested region is outside the memory domain");
++    std::vector<uint8_t> data(size);
++    for(uint64_t offset = 0; offset < size; offset++) {
++      if(domain == "wram") data[offset] = cpu.wram[address + offset];
++      if(domain == "vram") data[offset] = vram->read(address + offset);
++      if(domain == "oam") data[offset] = oam->read(address + offset);
++      if(domain == "cgram") data[offset] = cgram->read(address + offset);
++      if(domain == "rom") data[offset] = rom.read(n24(address + offset));
++      if(domain == "bus") data[offset] = ares::SuperFamicom::bus.read(n24(address + offset), cpu.r.mdr);
++    }
++    std::string fields = ",\"domain\":" + quoted(domain);
++    fields += ",\"address\":" + std::to_string(address);
++    fields += ",\"size\":" + std::to_string(size);
++    fields += ",\"data\":" + quoted(encodeHex(data));
++    return success(id, fields);
++  }
++
++  if(command == "memory.write") {
++    std::string domain, encoded;
++    uint64_t address = 0;
++    std::vector<uint8_t> replacement;
++    if(!stringField(document, "domain", domain) || !stringField(document, "data", encoded) ||
++       !unsignedField(document, "address", 0, sizeof(cpu.wram), address) ||
++       !decodeHex(encoded, replacement) || replacement.size() > MaximumTransfer) {
++      return failure(id, "INVALID_ARGUMENT", "domain/address and 1..65536 bytes of compact hex data are required");
++    }
++    if(domain != "wram") return failure(id, "UNSUPPORTED_DOMAIN", "memory.write currently supports only wram; use rom.patch for ROM");
++    if(!regionValid(address, replacement.size(), sizeof(cpu.wram))) return failure(id, "INVALID_ADDRESS", "write is outside WRAM");
++    std::vector<uint8_t> original(replacement.size());
++    for(size_t offset = 0; offset < replacement.size(); offset++) {
++      original[offset] = cpu.wram[address + offset];
++      cpu.wram[address + offset] = replacement[offset];
++    }
++    std::string fields = ",\"domain\":\"wram\",\"address\":" + std::to_string(address);
++    fields += ",\"written\":" + std::to_string(replacement.size());
++    fields += ",\"original\":" + quoted(encodeHex(original));
++    fields += ",\"resulting\":" + quoted(encodeHex(replacement));
++    return success(id, fields);
++  }
++
++  if(command == "rom.read") {
++    uint64_t offset = 0, size = 0;
++    if(!unsignedField(document, "offset", 0, rom.size(), offset) ||
++       !unsignedField(document, "size", 1, MaximumTransfer, size) ||
++       !regionValid(offset, size, rom.size())) {
++      return failure(id, "INVALID_ADDRESS", "ROM offset/size is outside the loaded image or exceeds 64 KiB");
++    }
++    std::vector<uint8_t> data(size);
++    for(uint64_t index = 0; index < size; index++) data[index] = rom.read(n24(offset + index));
++    std::string fields = ",\"offset\":" + std::to_string(offset);
++    fields += ",\"size\":" + std::to_string(size);
++    fields += ",\"data\":" + quoted(encodeHex(data));
++    return success(id, fields);
++  }
++
++  if(command == "rom.patch") {
++    uint64_t offset = 0;
++    std::string expectedHex, replacementHex, expectedSha;
++    std::vector<uint8_t> expected, replacement;
++    if(!unsignedField(document, "offset", 0, rom.size(), offset) ||
++       !stringField(document, "expected", expectedHex) ||
++       !stringField(document, "replacement", replacementHex) ||
++       !stringField(document, "expected_rom_sha256", expectedSha) ||
++       !normalizeSha256(expectedSha) ||
++       !decodeHex(expectedHex, expected) || !decodeHex(replacementHex, replacement) ||
++       expected.size() != replacement.size() || expected.size() > MaximumTransfer) {
++      return failure(id, "INVALID_ARGUMENT", "offset, ROM SHA-256, and equal 1..65536-byte expected/replacement hex are required");
++    }
++    if(expectedSha != _romSha256) return failure(id, "ROM_HASH_MISMATCH", "loaded ROM SHA-256 does not match expected_rom_sha256");
++    if(!regionValid(offset, expected.size(), rom.size())) return failure(id, "INVALID_ADDRESS", "patch is outside the loaded ROM image");
++    for(auto& [patchId, patch] : _patches) {
++      auto end = offset + expected.size();
++      auto patchEnd = static_cast<uint64_t>(patch.offset) + patch.replacement.size();
++      if(offset < patchEnd && patch.offset < end) return failure(id, "PATCH_OVERLAP", "patch overlaps an active runtime patch");
++    }
++    std::vector<uint8_t> actual(expected.size());
++    for(size_t index = 0; index < actual.size(); index++) actual[index] = rom.read(n24(offset + index));
++    if(actual != expected) return failure(id, "EXPECTED_MISMATCH", "current ROM bytes do not match expected");
++    auto patchId = std::string{"patch-"} + std::to_string(_nextPatchId++);
++    for(size_t index = 0; index < replacement.size(); index++) rom.program(n24(offset + index), replacement[index]);
++    _patches.emplace(patchId, Patch{patchId, static_cast<uint32_t>(offset), actual, replacement});
++    logEvent("rom_patch_applied", patchId);
++    std::string fields = ",\"patch_id\":" + quoted(patchId);
++    fields += ",\"offset\":" + std::to_string(offset);
++    fields += ",\"original\":" + quoted(encodeHex(actual));
++    fields += ",\"replacement\":" + quoted(encodeHex(replacement));
++    fields += ",\"rom_sha256\":" + quoted(_romSha256);
++    return success(id, fields);
++  }
++
++  if(command == "rom.patch.list") {
++    std::string list = "[";
++    bool first = true;
++    for(auto& [patchId, patch] : _patches) {
++      if(!first) list += ',';
++      first = false;
++      list += "{\"patch_id\":" + quoted(patch.id);
++      list += ",\"offset\":" + std::to_string(patch.offset);
++      list += ",\"original\":" + quoted(encodeHex(patch.original));
++      list += ",\"replacement\":" + quoted(encodeHex(patch.replacement));
++      list += ",\"rom_sha256\":" + quoted(_romSha256) + "}";
++    }
++    list += ']';
++    return success(id, ",\"patches\":" + list);
++  }
++
++  if(command == "rom.patch.revert") {
++    std::string patchId, expectedSha;
++    if(!stringField(document, "patch_id", patchId) ||
++       !stringField(document, "expected_rom_sha256", expectedSha) || !normalizeSha256(expectedSha)) {
++      return failure(id, "INVALID_ARGUMENT", "patch_id and expected_rom_sha256 are required");
++    }
++    if(expectedSha != _romSha256) return failure(id, "ROM_HASH_MISMATCH", "loaded ROM SHA-256 does not match expected_rom_sha256");
++    auto found = _patches.find(patchId);
++    if(found == _patches.end()) return failure(id, "PATCH_NOT_FOUND", "no active patch has that ID");
++    auto& patch = found->second;
++    for(size_t index = 0; index < patch.replacement.size(); index++) {
++      if(rom.read(n24(patch.offset + index)) != patch.replacement[index]) {
++        return failure(id, "PATCH_CONFLICT", "live ROM bytes no longer match this patch's replacement");
++      }
++    }
++    for(size_t index = 0; index < patch.original.size(); index++) rom.program(n24(patch.offset + index), patch.original[index]);
++    std::string fields = ",\"patch_id\":" + quoted(patch.id);
++    fields += ",\"offset\":" + std::to_string(patch.offset);
++    fields += ",\"original\":" + quoted(encodeHex(patch.original));
++    fields += ",\"replacement\":" + quoted(encodeHex(patch.replacement));
++    fields += ",\"rom_sha256\":" + quoted(_romSha256) + ",\"reverted\":true";
++    logEvent("rom_patch_reverted", patch.id);
++    _patches.erase(found);
++    return success(id, fields);
++  }
++
++  if(command == "savestate.create") {
++    std::string name;
++    if(auto node = document["name"]) {
++      name = nodeText(node);
++      if(name == "null") name.clear();
++      if(name.size() > 80) return failure(id, "INVALID_ARGUMENT", "state name exceeds 80 characters");
++    }
++    auto serialized = emulator->root->serialize();
++    if(!serialized) return failure(id, "SAVESTATE_FAILED", "ares could not serialize the machine");
++    auto stateId = std::string{"state-"} + std::to_string(_nextStateId++);
++    State state;
++    state.id = stateId;
++    state.name = name;
++    state.romSha256 = _romSha256;
++    state.data.assign(serialized.data(), serialized.data() + serialized.size());
++    auto byteSize = state.data.size();
++    _states.emplace(stateId, std::move(state));
++    logEvent("savestate_created", stateId);
++    std::string fields = ",\"state_id\":" + quoted(stateId);
++    fields += ",\"name\":" + (name.empty() ? "null" : quoted(name));
++    fields += ",\"size\":" + std::to_string(byteSize);
++    fields += ",\"rom_sha256\":" + quoted(_romSha256);
++    return success(id, fields);
++  }
++
++  if(command == "savestate.restore") {
++    std::string stateId;
++    if(!stringField(document, "state_id", stateId)) return failure(id, "INVALID_ARGUMENT", "state_id is required");
++    auto found = _states.find(stateId);
++    if(found == _states.end()) return failure(id, "SAVESTATE_NOT_FOUND", "no in-memory state has that ID");
++    if(found->second.romSha256 != _romSha256) return failure(id, "ROM_HASH_MISMATCH", "save state belongs to a different ROM");
++    serializer serialized{found->second.data.data(), static_cast<u32>(found->second.data.size())};
++    if(!emulator->root->unserialize(serialized)) return failure(id, "SAVESTATE_FAILED", "ares rejected the serialized state");
++    logEvent("savestate_restored", stateId);
++    return success(id, ",\"state_id\":" + quoted(stateId) + ",\"restored\":true");
++  }
++
++  if(command == "savestate.delete") {
++    std::string stateId;
++    if(!stringField(document, "state_id", stateId)) return failure(id, "INVALID_ARGUMENT", "state_id is required");
++    if(!_states.erase(stateId)) return failure(id, "SAVESTATE_NOT_FOUND", "no in-memory state has that ID");
++    logEvent("savestate_deleted", stateId);
++    return success(id, ",\"state_id\":" + quoted(stateId) + ",\"deleted\":true");
++  }
++
++  if(command == "screen.capture") {
++    if(_frame.empty() || !_frameWidth || !_frameHeight) return failure(id, "NO_FRAME", "no completed video frame is available yet");
++    std::string directoryPath = "/tmp/ares-debug-captures";
++    if(!directory::create(directoryPath.c_str(), 0700)) return failure(id, "CAPTURE_FAILED", "could not create the controlled capture directory");
++#if !defined(_WIN32)
++    if(::chmod(directoryPath.c_str(), 0700) != 0) return failure(id, "CAPTURE_FAILED", "could not secure the controlled capture directory");
++#endif
++#if defined(_WIN32)
++    uint64_t processId = 0;
++#else
++    uint64_t processId = static_cast<uint64_t>(::getpid());
++#endif
++    auto path = directoryPath + "/ares-" + std::to_string(processId) + "-" + std::to_string(_nextCaptureId++) + ".png";
++    if(!Encode::PNG::RGB8(path.c_str(), _frame.data(), _frameWidth * sizeof(uint32_t), _frameWidth, _frameHeight)) {
++      return failure(id, "CAPTURE_FAILED", "ares PNG encoder failed");
++    }
++    std::string fields = ",\"path\":" + quoted(path);
++    fields += ",\"width\":" + std::to_string(_frameWidth);
++    fields += ",\"height\":" + std::to_string(_frameHeight);
++    fields += ",\"frame\":" + std::to_string(_frameCounter);
++    return success(id, fields);
++  }
++
++  return failure(id, "UNKNOWN_COMMAND", "unknown command: " + command);
++#endif
++}
++
++auto DebugBridge::logEvent(const char* event, const std::string& detail) const -> void {
++  std::fprintf(stderr, "{\"component\":\"ares-debug\",\"event\":\"%s\"", event);
++  if(!detail.empty()) std::fprintf(stderr, ",\"detail\":\"%s\"", jsonEscape(detail).c_str());
++  std::fprintf(stderr, "}\n");
++  std::fflush(stderr);
++}
+diff --git a/desktop-ui/debug_bridge.hpp b/desktop-ui/debug_bridge.hpp
+new file mode 100644
+index 0000000..391b43b
+--- /dev/null
++++ b/desktop-ui/debug_bridge.hpp
+@@ -0,0 +1,92 @@
++#pragma once
++
++#include <atomic>
++#include <condition_variable>
++#include <cstdint>
++#include <deque>
++#include <map>
++#include <memory>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++class DebugBridge {
++public:
++  static constexpr uint32_t ProtocolVersion = 1;
++  static constexpr const char* BridgeVersion = "0.1.0";
++
++  DebugBridge() = default;
++  DebugBridge(const DebugBridge&) = delete;
++  auto operator=(const DebugBridge&) -> DebugBridge& = delete;
++
++  auto start(const std::string& socketPath) -> bool;
++  auto stop() -> void;
++  auto active() const -> bool { return _active.load(); }
++  auto pending() const -> bool { return _pending.load() != 0; }
++
++  // Called only by the emulator worker after the core has yielded at an SNES
++  // instruction boundary, or while already suspended there/no game is loaded.
++  auto processBoundary() -> void;
++
++  // Called while Program::Guard excludes the emulator worker.
++  auto gameLoaded() -> void;
++  auto gameUnloaded() -> void;
++
++  // Called on the emulator worker from Program::video().
++  auto captureFrame(const uint32_t* data, uint32_t pitch, uint32_t width, uint32_t height) -> void;
++
++private:
++  struct Request {
++    std::string line;
++    std::string response;
++    bool completed = false;
++    std::mutex mutex;
++    std::condition_variable condition;
++  };
++
++  struct Patch {
++    std::string id;
++    uint32_t offset = 0;
++    std::vector<uint8_t> original;
++    std::vector<uint8_t> replacement;
++  };
++
++  struct State {
++    std::string id;
++    std::string name;
++    std::string romSha256;
++    std::vector<uint8_t> data;
++  };
++
++  auto serverLoop() -> void;
++  auto clientLoop(int socket) -> void;
++  auto enqueue(const std::string& line) -> std::shared_ptr<Request>;
++  auto dispatch(const std::string& line) -> std::string;
++  auto failPending() -> void;
++  auto logEvent(const char* event, const std::string& detail = {}) const -> void;
++
++  std::atomic<bool> _active = false;
++  std::atomic<uint32_t> _pending = 0;
++  std::atomic<int> _listenSocket = -1;
++  std::atomic<int> _clientSocket = -1;
++  std::thread _serverThread;
++  std::string _socketPath;
++  std::mutex _queueMutex;
++  std::deque<std::shared_ptr<Request>> _queue;
++
++  bool _gameLoaded = false;
++  std::string _romName;
++  std::string _romSha256;
++  uint64_t _frameCounter = 0;
++  uint64_t _nextPatchId = 1;
++  uint64_t _nextStateId = 1;
++  uint64_t _nextCaptureId = 1;
++  std::map<std::string, Patch> _patches;
++  std::map<std::string, State> _states;
++  std::vector<uint32_t> _frame;
++  uint32_t _frameWidth = 0;
++  uint32_t _frameHeight = 0;
++};
++
++extern DebugBridge debugBridge;

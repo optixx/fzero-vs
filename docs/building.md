@@ -26,6 +26,7 @@ make ares JOBS=8               # patch, configure with Ninja, build desktop-ui
 make server                   # C11 server -> build/server/fzvs-server
 make all                      # both components
 make test                     # local tests; no downloads or real ROM required
+make test-mcp                 # fake-bridge tests for the Python MCP sidecar
 make dry-run-2p                # inspect startup; also dry-run-4p
 make test-2p RUN_ARGS='--duration 60'  # build both, then launch; also test-4p
 make clean                    # clean compiled outputs, retain source/config/logs
@@ -44,6 +45,9 @@ actual binary inside the app bundle so macOS finds its Metal shaders, preserving
 arguments, signals and the caller’s working directory. On Linux it runs
 `build/ares/desktop-ui/ares`.
 See [local-testing.md](local-testing.md) for input assignment and runtime flags.
+The optional local debugger is enabled with
+`--ares-debug-socket /tmp/ares-debug.sock`; see the
+[debug protocol](ares-debug-protocol.md) and [MCP sidecar](../mcp/README.md).
 
 ## Pinning and patches
 

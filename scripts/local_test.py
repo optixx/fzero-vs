@@ -34,6 +34,11 @@ def arguments():
     parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
     parser.add_argument("--port", type=int, default=12000)
     parser.add_argument("--run-root", type=Path, default=ROOT / ".local-tests")
+    parser.add_argument(
+        "--ares-debug-socket",
+        type=Path,
+        help="enable the ares debug bridge on client 1 at this Unix socket",
+    )
     parser.add_argument("--startup-timeout", type=positive, default=10.0)
     parser.add_argument("--duration", type=positive, help="stop after this many seconds once clients launch")
     parser.add_argument("--input", action="append", dest="inputs", metavar="DEVICE",
@@ -60,6 +65,10 @@ def arguments():
         parser.error("assign each active input device to only one client")
     for field in ("client", "server", "rom", "run_root"):
         setattr(args, field, getattr(args, field).expanduser().resolve())
+    if args.ares_debug_socket is not None:
+        # Keep /tmp spelled as supplied so launch plans match sidecar configs;
+        # macOS otherwise canonicalizes it to the equivalent /private/tmp path.
+        args.ares_debug_socket = args.ares_debug_socket.expanduser().absolute()
     return args
 
 
@@ -88,6 +97,8 @@ def launch_plan(args, run_dir):
                            "--fzvs-bind", "127.0.0.1", "--fzvs-port", str(args.port),
                            "--fzvs-room-name", "Local test", "--fzvs-track", str(args.track),
                            "--fzvs-league", str(args.league), "--fzvs-host-ready-file", str(ready_file)]
+        if index == 0 and args.ares_debug_socket is not None:
+            client.extend(["--ares-debug-socket", str(args.ares_debug_socket)])
         if index:
             client.append("--fzvs-mute")
         if args.baseline:
@@ -101,7 +112,13 @@ def launch_plan(args, run_dir):
         client.append(str(args.rom))
         entries.append({"name": name, "argv": client, "cwd": str(profile),
                         "log": str(run_dir / f"{name}.log")})
-    return {"server_mode": args.server_mode, "players": args.players, "server_ready_file": str(ready_file), "processes": entries}
+    return {
+        "server_mode": args.server_mode,
+        "players": args.players,
+        "server_ready_file": str(ready_file),
+        "ares_debug_socket": str(args.ares_debug_socket) if args.ares_debug_socket else None,
+        "processes": entries,
+    }
 
 
 def start(entry, children):

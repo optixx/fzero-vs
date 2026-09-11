@@ -1,0 +1,16 @@
+[mcp_servers.ares]
+command = "uv"
+args = [
+  "run",
+  "--frozen",
+  "--project",
+  "mcp",
+  "fzero-dev-mcp",
+  "--socket",
+  "/tmp/fzero-vs-ares-debug.sock",
+]
+cwd = "."
+enabled = true
+required = false
+startup_timeout_sec = 30
+tool_timeout_sec = 60

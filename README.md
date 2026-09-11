@@ -27,6 +27,8 @@ unload, disconnect and the next race.
 - [Build and patch workflow](docs/building.md)
 - [Desktop harness, controls and remote server](docs/local-testing.md)
 - [Protocol, memory map and validation scope](docs/protocol.md)
+- [ares local debug protocol](docs/ares-debug-protocol.md)
+- [MCP sidecar](mcp/README.md)
 
 Source: `server/` (C server), `client/` (C++ game/network state machine), `shared/`
 (wire codec), `patches/ares/` (emulator integration). `original/` is the legacy

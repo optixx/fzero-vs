@@ -60,12 +60,11 @@ def apply_patches(root, pin):
     if marker.exists() and json.loads(marker.read_text()) == signature:
         print("Ares patch series already applied; local edits preserved.")
         return
-    if git(source, "status", "--porcelain"):
-        raise RuntimeError("Ares has local changes or a different applied patch series. Preserve/export them and prepare a clean checkout before changing the series; no files were reset.")
+    combined = b""
+    command = ["git", "-C", str(source)]
     if files:
         # Apply dependent patches to a temporary index first. If any patch fails,
         # the real index and working tree are untouched. Then apply one net diff.
-        command = ["git", "-C", str(source)]
         with tempfile.TemporaryDirectory(prefix="fzvs-patch-check-") as temp:
             env = dict(os.environ, GIT_INDEX_FILE=str(Path(temp) / "index"))
             subprocess.run(command + ["read-tree", "HEAD"], env=env, check=True)
@@ -74,9 +73,24 @@ def apply_patches(root, pin):
             combined = subprocess.check_output(command + [
                 "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv",
                 "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "HEAD"], env=env)
-        if combined:
-            subprocess.run(command + ["apply", "--index", "--check"], input=combined, check=True)
-            subprocess.run(command + ["apply", "--index"], input=combined, check=True)
+    status = git(source, "status", "--porcelain")
+    if status:
+        # A patch may be edited while its previous revision is already applied.
+        # Adopt that checkout only when its complete tracked diff exactly equals
+        # the newly validated series and there are no unrelated untracked files.
+        current = subprocess.check_output(command + [
+            "diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv",
+            "--no-color", "--src-prefix=a/", "--dst-prefix=b/"])
+        untracked = any(line.startswith("?? ") for line in status.splitlines())
+        if untracked or current != combined:
+            raise RuntimeError("Ares has local changes or a different applied patch series. Preserve/export them and prepare a clean checkout before changing the series; no files were reset.")
+        subprocess.run(command + ["add", "-A"], check=True)
+        marker.write_text(json.dumps(signature, indent=2) + "\n")
+        print("Ares working tree exactly matches the revised patch series; updated its patch marker.")
+        return
+    if combined:
+        subprocess.run(command + ["apply", "--index", "--check"], input=combined, check=True)
+        subprocess.run(command + ["apply", "--index"], input=combined, check=True)
     marker.write_text(json.dumps(signature, indent=2) + "\n")
     print(f"Applied {len(files)} Ares patches." if files else
           "Patch series empty: building stock Ares; multiplayer flags are not available yet.")
