@@ -1,0 +1,18 @@
+{
+  "mcp": {
+    "servers": {
+      "ares": {
+        "command": "uv",
+        "args": [
+          "run",
+          "--frozen",
+          "--project",
+          "mcp",
+          "fzero-dev-mcp",
+          "--socket",
+          "/tmp/fzero-vs-ares-debug.sock"
+        ]
+      }
+    }
+  }
+}

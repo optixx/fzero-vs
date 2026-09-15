@@ -20,7 +20,16 @@ int main() {
   sockaddr_in remote{};uint64_t nonce=0;
   auto attach=[&]{uint8_t stale[257];while(recv(server,stale,sizeof(stale),MSG_DONTWAIT)>0){}assert(client.attach(memory));client.tick();uint8_t bytes[257];socklen_t length=sizeof(remote);auto n=recvfrom(server,bytes,sizeof(bytes),0,(sockaddr*)&remote,&length);fz_packet p{};assert(n>0 && fz_decode(&p,bytes,n) && p.type==FZ_HELLO);nonce=fz_u64(p.payload);};
   auto send=[&](fz_packet p){uint8_t bytes[FZ_MAX_PACKET];size_t n=fz_encode(bytes,sizeof(bytes),&p);assert(sendto(server,bytes,n,0,(sockaddr*)&remote,sizeof(remote))==(ssize_t)n);usleep(2000);client.tick();};
-  auto patched=[&]{client.frame();assert(rom[0x18176]==0xea);};
+  auto patched=[&]{
+    ram[0x54]=0;ram[0x55]=1;ram[0x56]=0;ram[0x26d]=ram[0x271]=0x68;
+    client.frame();assert(rom[0x18176]==0xea);
+    assert(rom[0x67800]!=0x42);
+    assert(rom[0x67800+5*32]==0x42);
+    assert(rom[0x67a00+5*32]==0x42);
+    assert(rom[0x67800+6*32]==0x42);
+    assert(rom[0x67a00+6*32]==0x42);
+    assert(ram[0x26d]==0xf0 && ram[0x271]==0xf0);
+  };
   auto restored=[&]{for(auto b:rom)assert(b==0x42);};
   // A stale/foreign join rejection cannot cancel a new attempt.
   attach();fz_packet reject{};reject.type=FZ_JOIN_REJECT;reject.length=9;fz_put64(reject.payload,nonce+1);reject.payload[8]=FZ_REJECT_PASSWORD;send(reject);assert(client.view().game!="disconnected");

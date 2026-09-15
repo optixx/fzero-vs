@@ -54,5 +54,6 @@ int main() {
   assert(client.snapshotBuffer.size()==16 && client.snapshotBuffer.front().peers[3].x==1);
   client.resetGame();
   assert(client.snapshotBuffer.empty());
+
   puts("Snapshot interpolation, buffering, gap hold and visibility behavior passed.");
 }

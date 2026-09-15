@@ -65,6 +65,7 @@ private:
   Game game=Init;
   bool loadedSent=false,selectedSent=false,finishedSent=false;
   std::map<uint32_t,uint8_t> originals;
+  std::map<uint32_t,uint8_t> titleOriginals;
   std::deque<Pending> pending;
   std::mutex mutex;
   View published;
@@ -79,7 +80,9 @@ private:
   void change(Game next);
   void resetGame();
   void patch(uint32_t offset,std::initializer_list<uint8_t> bytes);
+  void patchTitleMenu();
   void restore();
+  void restoreTitle();
   void prepareRace();
   void opponents();
   uint64_t interpolationDelay() const;

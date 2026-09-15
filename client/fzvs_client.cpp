@@ -32,7 +32,7 @@ void Client::log(const std::string& text) {
   events.push_back(text); if(events.size()>12) events.pop_front();
 }
 void Client::failure(const std::string& text) {
-  restore(); clearSnapshotBuffer(); if(memory.reset) memory.reset();
+  restore(); restoreTitle(); clearSnapshotBuffer(); if(memory.reset) memory.reset();
   if(socket>=0) { close(socket); socket=-1; }
   change(Disconnected); log(text); publish();
 }
@@ -55,14 +55,14 @@ bool Client::attach(Memory m) {
   session=token=0; id=-1; race=commandSeq=stateSeq=snapshotSeq=0; phase=FZ_LOBBY;
   lastRecv=rateTime=now(); lastHello=lastPing=lastPublish=0; frames=0; bestRtt=1e12;
   rx=tx=bytes=stale=retries=gaps=snapshots=prevRx=prevTx=prevBytes=prevFrames=0;
-  rtt=jitter=offset=0; peers={}; pending.clear(); resetGame(); log("Connecting to "+config.address); publish(); return true;
+  rtt=jitter=offset=0; peers={}; pending.clear(); patchTitleMenu(); resetGame(); log("Connecting to "+config.address); publish(); return true;
 }
 void Client::detach() {
   if(socket>=0) {
     if(id>=0 && pending.empty()) { fz_packet packet{}; packet.type=FZ_COMMAND; packet.seq=++commandSeq; packet.length=1; packet.payload[0]=FZ_LEAVE; send(packet); }
     close(socket); socket=-1;
   }
-  restore(); memory={}; id=-1; pending.clear(); clearSnapshotBuffer(); game=Init;
+  restore(); restoreTitle(); memory={}; id=-1; pending.clear(); clearSnapshotBuffer(); game=Init;
   std::lock_guard<std::mutex> lock(mutex); requests.clear(); published={};
 }
 void Client::send(fz_packet packet) {
@@ -157,7 +157,56 @@ void Client::change(Game next) {
 void Client::patch(uint32_t address,std::initializer_list<uint8_t> values) {
   for(auto value:values) { if(!originals.count(address)) originals[address]=memory.rom(address); memory.writeRom(address++,value); }
 }
+void Client::patchTitleMenu() {
+  if(!memory.rom || !memory.writeRom || !titleOriginals.empty()) return;
+  // MULTI drawn with the fat lettering of the original GRAND PRIX art that occupied
+  // these tiles: five 8x16 cells fill the whole 40px text area. Palette usage matches
+  // the original glyphs: fill 3 with a white shine band (2) around the midline, dark
+  // stripe rows (1/4), and a 1px black outline (5). Only tiles $120-$124/$130-$134 may
+  // be written; $125/$135 hold the bolt menu cursor and $126-$129 are shared with
+  // the PRACTICE entry.
+  struct Glyph { char character; const char *rows[16]; };
+  static const Glyph glyphs[]={
+    {'I',{"..5555..",".533335.",".553355.","..5335..","..5335..","..5335..","..5225..","..5115..","..5225..","..5335..","..5445..","..5335..","..5335..",".553355.",".533335.",".555555."}},
+    {'L',{"5555....","5335....","5335....","5335....","5335....","5335....","5225....","5115....","5225....","5335....","5445....","5335....","5335....","53355555","53333335","55555555"}},
+    {'M',{"55555555","53333335","53333335","53355335","53333335","53355335","52255225","51155115","52255225","53355335","54455445","53355335","53355335","53355335","53355335","55555555"}},
+    {'T',{"55555555","53333335","55533555","..5335..","..5335..","..5335..","..5225..","..5115..","..5225..","..5335..","..5445..","..5335..","..5335..","..5335..",".533335.",".555555."}},
+    {'U',{"55555555","53355335","53355335","53355335","53355335","53355335","52255225","51155115","52255225","53355335","54455445","53355335","53355335","53333335",".533335.",".555555."}},
+  };
+  auto glyph=[&](char character)->const Glyph* {
+    for(const auto& candidate:glyphs) if(candidate.character==character) return &candidate;
+    return nullptr;
+  };
+  std::array<std::array<uint8_t,80>,16> pixels{};
+  unsigned cursor=0;
+  for(const char *letter="MULTI"; *letter; letter++) {
+    const Glyph* drawing=glyph(*letter);
+    if(!drawing) continue;
+    for(unsigned y=0;y<16;y++) for(unsigned x=0;x<8;x++) {
+      char cell=drawing->rows[y][x];
+      if(cell!='.') pixels[y][cursor+x]=(uint8_t)(cell-'0');
+    }
+    cursor+=8;
+  }
+  auto patchTile=[&](unsigned tileX,unsigned tileY,uint32_t address) {
+    std::array<uint8_t,32> encoded{};
+    for(unsigned y=0;y<8;y++) for(unsigned x=0;x<8;x++) {
+      uint8_t color=pixels[tileY*8+y][tileX*8+x];
+      for(unsigned plane=0;plane<4;plane++) if((color>>plane)&1)
+        encoded[(plane/2)*16+y*2+plane%2]|=(uint8_t)(1u<<(7-x));
+    }
+    for(auto value:encoded) {
+      titleOriginals[address]=memory.rom(address);
+      memory.writeRom(address++,value);
+    }
+  };
+  for(unsigned x=0;x<5;x++) {
+    patchTile(x,0,0x67800+x*32);
+    patchTile(x,1,0x67a00+x*32);
+  }
+}
 void Client::restore() { if(memory.writeRom) for(auto [address,value]:originals) memory.writeRom(address,value); originals.clear(); }
+void Client::restoreTitle() { if(memory.writeRom) for(auto [address,value]:titleOriginals) memory.writeRom(address,value); titleOriginals.clear(); }
 void Client::resetGame() {
   restore(); if(memory.reset) memory.reset();
   clearSnapshotBuffer(); game=Init; selectedSent=loadedSent=finishedSent=false; armedTime=startTime=0; car=0;
@@ -224,6 +273,13 @@ void Client::opponents() {
 void Client::frame() {
   if(!memory.ram || game==Disconnected) return;
   frames++;
+  // Hide the two remaining GRAND PRIX text sprites ("P R" and "I X"); their tiles
+  // $126-$129 are shared with PRACTICE. The bolt cursor sprite (tiles $125/$135)
+  // stays visible and keeps pointing at the MULTI entry.
+  if(memory.ram(0x54)==0 && memory.ram(0x55)==1 && memory.ram(0x56)==0) {
+    memory.writeRam(0x26d,0xf0);
+    memory.writeRam(0x271,0xf0);
+  }
   if(config.baseline) { if(memory.ram(0x54)==2) game=Race; else game=CarSelect; return; }
   switch(game) {
   case Init:
